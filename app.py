@@ -3,6 +3,7 @@ import json
 import time
 import queue
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, Response, send_from_directory
 from flask_cors import CORS
 
@@ -47,12 +48,25 @@ def run_query_stream(query, enable_hyde, q):
         t0 = time.time()
         all_recalls = []
         all_summaries = []
-        for qi, sq in enumerate(query_info.sub_queries):
+
+        def _recall_for_subquery(qi, sq):
             sub_q = sq["query"]
-            all_recalls.append(rag._recall_text(sub_q, qi, rag.topk_recall))
-            all_recalls.append(rag._recall_vector(sub_q, qi, rag.topk_recall, query_info.intent))
-            all_recalls.append(rag._recall_reverse(sub_q, qi, rag.topk_recall, query_info.intent))
-            all_summaries.extend(rag._recall_summary(sub_q, qi))
+            text_r = rag._recall_text(sub_q, qi, rag.topk_recall)
+            vector_r = rag._recall_vector(sub_q, qi, rag.topk_recall, query_info.intent)
+            reverse_r = rag._recall_reverse(sub_q, qi, rag.topk_recall, query_info.intent)
+            summary_r = rag._recall_summary(sub_q, qi)
+            return text_r, vector_r, reverse_r, summary_r
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(_recall_for_subquery, qi, sq): qi
+                for qi, sq in enumerate(query_info.sub_queries)
+            }
+            for future in as_completed(futures):
+                text_r, vector_r, reverse_r, summary_r = future.result()
+                all_recalls.extend([text_r, vector_r, reverse_r])
+                all_summaries.extend(summary_r)
+
         if enable_hyde and query_info.hyde_answer:
             all_recalls.append(rag._recall_hyde(query_info.hyde_answer, rag.topk_recall, query_info.intent))
         t_retrieve = time.time() - t0
