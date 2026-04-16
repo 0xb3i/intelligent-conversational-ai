@@ -1,0 +1,38 @@
+# Notebooks
+*.ipynb
+
+# PDF
+*.pdf
+
+# Data files
+data/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Pickle
+*.pkl
+
+# ChromaDB
+chroma_db/
+
+# Environment
+.env
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
