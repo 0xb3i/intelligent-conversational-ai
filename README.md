@@ -4,7 +4,7 @@
 
 ## 效果演示
 
-![Demo](page.gif?v=2)
+![Demo](demo.gif)
 
 ## 系统架构
 
