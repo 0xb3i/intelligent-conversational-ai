@@ -893,6 +893,69 @@ def print_rag_result(result: RAGResult):
 # 知识库构建
 # ============================================================
 
+def _get_or_create_collection(dv_client, name, dimension, metric, fields_schema):
+    col = dv_client.get(name)
+    if col is not None:
+        stats = col.stats()
+        if getattr(stats, "code", -1) == 0:
+            doc_count = stats.output.partitions["default"].total_doc_count
+            print(f"  {name} 已存在，含 {doc_count} 条数据（断点续传）")
+            return col, doc_count
+    try:
+        dv_client.delete(name)
+    except Exception:
+        pass
+    dv_client.create(name=name, dimension=dimension, metric=metric, fields_schema=fields_schema)
+    col = dv_client.get(name)
+    for _ in range(30):
+        if col is not None:
+            stats = col.stats()
+            if getattr(stats, "code", -1) == 0:
+                break
+        time.sleep(1)
+        col = dv_client.get(name)
+    if col is None:
+        raise RuntimeError(f"{name} 创建超时")
+    print(f"  {name} 创建就绪")
+    return col, 0
+
+
+def _upsert_in_batches(col, df, text_col, id_prefix, fields_map, embedder, batch_size, skip_count=0):
+    texts = df[text_col].tolist()
+    total = len(texts)
+    start = (skip_count // batch_size) * batch_size
+    if start > 0:
+        print(f"  跳过前 {start} 条（已插入），从第 {start + 1} 条继续")
+    inserted = 0
+    failed = 0
+    for i in range(start, total, batch_size):
+        batch = texts[i : i + batch_size]
+        try:
+            embs = embedder.embed_batch(batch)
+        except Exception as e:
+            print(f"  [WARN] Embedding 失败 batch {i}: {e}")
+            time.sleep(2)
+            continue
+        docs = []
+        for j, emb in enumerate(embs):
+            idx = i + j
+            row = df.iloc[idx]
+            doc_id = f"{id_prefix}{row.name}" if id_prefix else str(row.name)
+            fields = {k: str(row[v]) for k, v in fields_map.items()}
+            docs.append(Doc(id=doc_id, vector=emb, fields=fields))
+        resp = col.upsert(docs)
+        if hasattr(resp, "code") and resp.code == 0:
+            inserted += len(docs)
+        else:
+            failed += len(docs)
+            print(f"  [WARN] upsert 失败 batch {i}: code={getattr(resp,'code','?')} msg={getattr(resp,'message','?')}")
+        done = min(i + batch_size, total)
+        if done % 100 == 0 or done == total:
+            print(f"  进度: {done}/{total} (本轮成功 {inserted}, 失败 {failed})")
+        time.sleep(0.5)
+    return inserted, failed
+
+
 def build_knowledge_base(
     api_key: str,
     dashvector_api_key: str,
@@ -900,7 +963,7 @@ def build_knowledge_base(
     data_dir: str = "data",
 ):
     print("=" * 60)
-    print("开始构建酒店评论知识库")
+    print("开始构建酒店评论知识库（支持断点续传）")
     print("=" * 60)
 
     data_path = Path(data_dir)
@@ -921,102 +984,66 @@ def build_knowledge_base(
     # --- 1. 评论向量库 ---
     print("\n[1/4] 构建评论向量库 (DashVector)...")
     comment_schema = {"comment": str, "room_type": str, "fuzzy_room_type": str}
-    try:
-        dv_client.delete("comment_database")
-    except Exception:
-        pass
-    dv_client.create(name="comment_database", dimension=1024, metric="cosine", fields_schema=comment_schema)
-    comment_col = dv_client.get("comment_database")
-
-    comment_texts = df_filtered["comment"].tolist()
-    inserted = 0
-    for i in range(0, len(comment_texts), BATCH_SIZE):
-        batch = comment_texts[i : i + BATCH_SIZE]
-        embs = embedder.embed_batch(batch)
-        docs = []
-        for j, emb in enumerate(embs):
-            idx = i + j
-            row = df_filtered.iloc[idx]
-            docs.append(
-                Doc(
-                    id=str(row.name),
-                    vector=emb,
-                    fields={
-                        "comment": row["comment"],
-                        "room_type": row["room_type"],
-                        "fuzzy_room_type": row["fuzzy_room_type"],
-                    },
-                )
-            )
-        resp = comment_col.upsert(docs)
-        if hasattr(resp, "code") and resp.code == 0:
-            inserted += len(docs)
-        time.sleep(0.5)
-    print(f"  评论数据库构建完成, 共 {inserted} 条")
+    comment_col, skip = _get_or_create_collection(
+        dv_client, "comment_database", 1024, "cosine", comment_schema
+    )
+    if skip < len(df_filtered):
+        ins, fail = _upsert_in_batches(
+            comment_col, df_filtered, "comment", "",
+            {"comment": "comment", "room_type": "room_type", "fuzzy_room_type": "fuzzy_room_type"},
+            embedder, BATCH_SIZE, skip,
+        )
+        print(f"  评论数据库构建完成, 本轮新增 {ins} 条" + (f", 失败 {fail} 条" if fail else ""))
+    else:
+        print(f"  评论数据库已完整，跳过")
 
     # --- 2. 反向 Query 向量库 ---
     print("\n[2/4] 构建反向 Query 向量库 (DashVector)...")
     query_schema = {"query": str, "comment_id": str, "comment": str, "room_type": str, "fuzzy_room_type": str}
-    try:
-        dv_client.delete("reverse_query_database")
-    except Exception:
-        pass
-    dv_client.create(name="reverse_query_database", dimension=1024, metric="cosine", fields_schema=query_schema)
-    query_col = dv_client.get("reverse_query_database")
-
-    query_texts = df_queries["query"].tolist()
-    inserted = 0
-    for i in range(0, len(query_texts), BATCH_SIZE):
-        batch = query_texts[i : i + BATCH_SIZE]
-        embs = embedder.embed_batch(batch)
-        docs = []
-        for j, emb in enumerate(embs):
-            idx = i + j
-            row = df_queries.iloc[idx]
-            docs.append(
-                Doc(
-                    id=f"query_{idx}",
-                    vector=emb,
-                    fields={
-                        "query": row["query"],
-                        "comment_id": str(row["comment_id"]),
-                        "comment": row["comment"],
-                        "room_type": row["room_type"],
-                        "fuzzy_room_type": row["fuzzy_room_type"],
-                    },
-                )
-            )
-        resp = query_col.upsert(docs)
-        if hasattr(resp, "code") and resp.code == 0:
-            inserted += len(docs)
-        time.sleep(0.5)
-    print(f"  反向 Query 数据库构建完成, 共 {inserted} 条")
+    query_col, skip = _get_or_create_collection(
+        dv_client, "reverse_query_database", 1024, "cosine", query_schema
+    )
+    if skip < len(df_queries):
+        ins, fail = _upsert_in_batches(
+            query_col, df_queries, "query", "query_",
+            {"query": "query", "comment_id": "comment_id", "comment": "comment",
+             "room_type": "room_type", "fuzzy_room_type": "fuzzy_room_type"},
+            embedder, BATCH_SIZE, skip,
+        )
+        print(f"  反向 Query 数据库构建完成, 本轮新增 {ins} 条" + (f", 失败 {fail} 条" if fail else ""))
+    else:
+        print(f"  反向 Query 数据库已完整，跳过")
 
     # --- 3. 摘要向量库 ---
     print("\n[3/4] 构建摘要向量库 (ChromaDB)...")
     try:
-        chroma_client.delete_collection("summary_database")
+        existing = chroma_client.get_collection("summary_database")
+        existing_count = existing.count()
+        if existing_count >= len(summaries):
+            print(f"  摘要数据库已完整（{existing_count} 条），跳过")
+        else:
+            print(f"  摘要数据库不完整（{existing_count}/{len(summaries)}），重建")
+            chroma_client.delete_collection("summary_database")
+            raise Exception("rebuild")
     except Exception:
-        pass
-    summary_col = chroma_client.create_collection(
-        name="summary_database", metadata={"hnsw:space": "cosine"}
-    )
-
-    keywords_list = [s["keywords"] for s in summaries]
-    for i in range(0, len(keywords_list), BATCH_SIZE):
-        batch = keywords_list[i : i + BATCH_SIZE]
-        embs = embedder.embed_batch(batch)
-        num = len(embs)
-        summary_col.add(
-            ids=[f"summary_{j}" for j in range(i, i + num)],
-            embeddings=embs,
-            documents=[s["summary"] for s in summaries[i : i + num]],
-            metadatas=[
-                {"category": s["category"], "keywords": s["keywords"], "comment_count": s["comment_count"]}
-                for s in summaries[i : i + num]
-            ],
+        summary_col = chroma_client.create_collection(
+            name="summary_database", metadata={"hnsw:space": "cosine"}
         )
-    print(f"  摘要数据库构建完成, 共 {len(summaries)} 条")
+        keywords_list = [s["keywords"] for s in summaries]
+        for i in range(0, len(keywords_list), BATCH_SIZE):
+            batch = keywords_list[i : i + BATCH_SIZE]
+            embs = embedder.embed_batch(batch)
+            num = len(embs)
+            summary_col.add(
+                ids=[f"summary_{j}" for j in range(i, i + num)],
+                embeddings=embs,
+                documents=[s["summary"] for s in summaries[i : i + num]],
+                metadatas=[
+                    {"category": s["category"], "keywords": s["keywords"], "comment_count": s["comment_count"]}
+                    for s in summaries[i : i + num]
+                ],
+            )
+        print(f"  摘要数据库构建完成, 共 {len(summaries)} 条")
 
     # --- 4. 倒排索引 ---
     print("\n[4/4] 构建倒排索引 (BM25)...")

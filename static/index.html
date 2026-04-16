@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>酒店评论智能问答</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Geist+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --color-brand:#18E299;--color-brand-light:#d4fae8;--color-brand-deep:#0fa76e;
+  --color-text:#0d0d0d;--color-text-secondary:#333;--color-text-muted:#666;--color-text-placeholder:#888;
+  --color-bg:#fff;--color-surface:#fafafa;--color-border:rgba(0,0,0,0.05);--color-border-medium:rgba(0,0,0,0.08);
+  --radius-sm:8px;--radius-md:16px;--radius-lg:24px;--radius-pill:9999px;
+  --shadow-card:rgba(0,0,0,0.03) 0 2px 4px;--shadow-btn:rgba(0,0,0,0.06) 0 1px 2px;
+  --font-sans:'Inter','Inter Fallback',system-ui,-apple-system,sans-serif;
+  --font-mono:'Geist Mono','Geist Mono Fallback',ui-monospace,SFMono-Regular,monospace;
+}
+html{font-size:16px;line-height:1.5}
+body{font-family:var(--font-sans);color:var(--color-text);background:var(--color-bg);-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+
+/* Nav */
+.nav{position:sticky;top:0;z-index:50;background:rgba(255,255,255,0.85);backdrop-filter:blur(12px);border-bottom:1px solid var(--color-border);padding:0 32px;height:56px;display:flex;align-items:center;justify-content:space-between}
+.nav-brand{font-size:15px;font-weight:600;letter-spacing:-0.2px;display:flex;align-items:center;gap:8px}
+.nav-brand .dot{width:8px;height:8px;border-radius:50%;background:var(--color-brand)}
+.nav-links{display:flex;gap:24px;align-items:center}
+.nav-links a{font-size:14px;font-weight:500;color:var(--color-text-muted);transition:color .15s}
+.nav-links a:hover{color:var(--color-brand)}
+
+/* Hero */
+.hero{position:relative;padding:96px 32px 64px;text-align:center;overflow:hidden}
+.hero::before{content:'';position:absolute;top:-120px;left:50%;transform:translateX(-50%);width:800px;height:500px;background:radial-gradient(ellipse at center,rgba(24,226,153,0.12) 0%,rgba(24,226,153,0.03) 40%,transparent 70%);pointer-events:none}
+.hero h1{font-size:clamp(2.25rem,5vw,4rem);font-weight:600;line-height:1.15;letter-spacing:-1.28px;position:relative}
+.hero h1 span{color:var(--color-brand)}
+.hero p{margin-top:16px;font-size:18px;color:var(--color-text-muted);max-width:560px;margin-left:auto;margin-right:auto;line-height:1.6}
+
+/* Search */
+.search-section{max-width:680px;margin:0 auto 64px;padding:0 32px;position:relative}
+.search-box{display:flex;gap:8px;align-items:center;background:var(--color-bg);border:1px solid var(--color-border-medium);border-radius:var(--radius-pill);padding:6px 6px 6px 20px;box-shadow:var(--shadow-card);transition:border-color .2s,box-shadow .2s}
+.search-box:focus-within{border-color:var(--color-brand);box-shadow:0 0 0 3px rgba(24,226,153,0.15)}
+.search-box input{flex:1;border:none;outline:none;font-family:var(--font-sans);font-size:15px;color:var(--color-text);background:transparent}
+.search-box input::placeholder{color:var(--color-text-placeholder)}
+.search-box button{background:var(--color-text);color:#fff;border:none;padding:8px 24px;border-radius:var(--radius-pill);font-family:var(--font-sans);font-size:15px;font-weight:500;cursor:pointer;box-shadow:var(--shadow-btn);transition:opacity .15s;white-space:nowrap}
+.search-box button:hover{opacity:0.88}
+.search-box button:disabled{opacity:0.4;cursor:not-allowed}
+.hyde-toggle{display:flex;align-items:center;gap:8px;margin-top:12px;justify-content:center;font-size:13px;color:var(--color-text-muted)}
+.hyde-toggle label{cursor:pointer;display:flex;align-items:center;gap:6px}
+.hyde-toggle input[type=checkbox]{accent-color:var(--color-brand);width:15px;height:15px}
+
+/* Examples */
+.examples{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-top:16px}
+.example-chip{font-size:13px;padding:4px 12px;border-radius:var(--radius-pill);border:1px solid var(--color-border);cursor:pointer;transition:all .15s;color:var(--color-text-muted);background:var(--color-bg)}
+.example-chip:hover{border-color:var(--color-brand);color:var(--color-brand-deep);background:var(--color-brand-light)}
+
+/* Pipeline Cards */
+.pipeline-section{max-width:800px;margin:0 auto;padding:0 32px 96px}
+.stage-card{background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-md);margin-bottom:12px;overflow:hidden;box-shadow:var(--shadow-card);transition:border-color .2s}
+.stage-card.active{border-color:var(--color-brand)}
+.stage-card.done{border-color:rgba(24,226,153,0.3)}
+.stage-card.error{border-color:#d45656}
+.stage-header{display:flex;align-items:center;gap:12px;padding:16px 20px;cursor:pointer;user-select:none}
+.stage-icon{width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;background:var(--color-surface);border:1px solid var(--color-border);transition:all .2s}
+.stage-card.active .stage-icon{background:var(--color-brand-light);border-color:var(--color-brand);color:var(--color-brand-deep)}
+.stage-card.done .stage-icon{background:var(--color-brand);border-color:var(--color-brand);color:#fff}
+.stage-card.error .stage-icon{background:#fde8e8;border-color:#d45656;color:#d45656}
+.stage-title{flex:1;font-size:15px;font-weight:500}
+.stage-badge{font-family:var(--font-mono);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.6px;padding:3px 10px;border-radius:var(--radius-pill);background:var(--color-surface);color:var(--color-text-muted);border:1px solid var(--color-border);transition:all .2s}
+.stage-card.active .stage-badge{background:var(--color-brand-light);color:var(--color-brand-deep);border-color:rgba(24,226,153,0.3)}
+.stage-card.done .stage-badge{background:var(--color-brand);color:#0d0d0d;border-color:var(--color-brand)}
+.stage-duration{font-family:var(--font-mono);font-size:12px;color:var(--color-text-muted);margin-left:8px}
+.stage-body{padding:0 20px 16px;display:none}
+.stage-card.expanded .stage-body{display:block}
+.stage-detail{font-size:14px;color:var(--color-text-secondary);line-height:1.6}
+.stage-detail .label{font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:0.6px;color:var(--color-text-muted);margin-bottom:4px}
+.stage-detail .value{margin-bottom:12px}
+.stage-detail code{font-family:var(--font-mono);font-size:12px;background:var(--color-surface);padding:2px 6px;border-radius:4px;border:1px solid var(--color-border)}
+.sub-query{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.sub-query .weight{font-family:var(--font-mono);font-size:11px;color:var(--color-brand-deep);background:var(--color-brand-light);padding:2px 8px;border-radius:var(--radius-pill)}
+
+/* Spinner */
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid var(--color-border);border-top-color:var(--color-brand);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Answer */
+.answer-section{max-width:800px;margin:0 auto;padding:0 32px 96px}
+.answer-card{background:var(--color-bg);border:1px solid rgba(24,226,153,0.2);border-radius:var(--radius-lg);padding:32px;box-shadow:var(--shadow-card)}
+.answer-card h2{font-size:20px;font-weight:600;letter-spacing:-0.2px;margin-bottom:16px;display:flex;align-items:center;gap:8px}
+.answer-card h2 .icon{color:var(--color-brand)}
+.answer-content{font-size:15px;line-height:1.7;color:var(--color-text-secondary);white-space:pre-wrap}
+.answer-content p{margin-bottom:12px}
+
+/* Comments */
+.comments-section{max-width:800px;margin:0 auto;padding:0 32px 96px}
+.comments-section h3{font-size:18px;font-weight:600;letter-spacing:-0.16px;margin-bottom:16px}
+.comment-card{background:var(--color-bg);border:1px solid var(--color-border);border-radius:var(--radius-md);padding:16px 20px;margin-bottom:10px;box-shadow:var(--shadow-card);transition:border-color .15s}
+.comment-card:hover{border-color:var(--color-border-medium)}
+.comment-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.comment-rank{font-family:var(--font-mono);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.6px;background:var(--color-brand);color:#0d0d0d;padding:2px 8px;border-radius:var(--radius-pill)}
+.comment-tag{font-size:12px;padding:2px 8px;border-radius:var(--radius-pill);background:var(--color-surface);border:1px solid var(--color-border);color:var(--color-text-muted)}
+.comment-score{font-family:var(--font-mono);font-size:12px;color:var(--color-text-muted)}
+.comment-text{font-size:14px;line-height:1.6;color:var(--color-text-secondary)}
+
+/* Footer */
+.footer{text-align:center;padding:32px;font-size:13px;color:var(--color-text-placeholder);border-top:1px solid var(--color-border)}
+
+/* Responsive */
+@media(max-width:768px){
+  .hero{padding:64px 20px 48px}
+  .hero h1{letter-spacing:-0.8px}
+  .search-section,.pipeline-section,.answer-section,.comments-section{padding-left:20px;padding-right:20px}
+  .nav{padding:0 20px}
+}
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-brand"><span class="dot"></span> Hotel Review RAG</div>
+  <div class="nav-links">
+    <a href="https://github.com/0xb3i/intelligent-conversational-ai" target="_blank">GitHub</a>
+  </div>
+</nav>
+
+<section class="hero">
+  <h1>酒店评论<span>智能问答</span></h1>
+  <p>基于 RAG 的多路检索增强生成系统，从 2000+ 真实住客评论中为您精准解答</p>
+</section>
+
+<section class="search-section">
+  <div class="search-box">
+    <input type="text" id="queryInput" placeholder="输入您的问题，例如：酒店的床舒服吗？" autocomplete="off">
+    <button id="queryBtn" onclick="submitQuery()">提问</button>
+  </div>
+  <div class="hyde-toggle">
+    <label><input type="checkbox" id="hydeCheck"> 启用 HyDE 召回（更精准但更慢）</label>
+  </div>
+  <div class="examples">
+    <span class="example-chip" onclick="setQuery('酒店的床舒服吗？睡眠质量怎么样？')">🛏️ 床铺舒适度</span>
+    <span class="example-chip" onclick="setQuery('早餐怎么样？有什么推荐？')">🍳 早餐体验</span>
+    <span class="example-chip" onclick="setQuery('酒店安静吗？有没有噪音问题？')">🔇 安静程度</span>
+    <span class="example-chip" onclick="setQuery('花园大床房的设施如何？')">🏡 花园大床房</span>
+  </div>
+</section>
+
+<div id="pipelineSection" class="pipeline-section" style="display:none"></div>
+<div id="answerSection" class="answer-section" style="display:none"></div>
+<div id="commentsSection" class="comments-section" style="display:none"></div>
+
+<footer class="footer">Powered by DashScope · DashVector · ChromaDB · Qwen-Plus</footer>
+
+<script>
+const STAGES = [
+  {key:'query_process', title:'查询处理', icon:'🔍'},
+  {key:'recall', title:'多路召回', icon:'📚'},
+  {key:'fusion', title:'RRF 融合', icon:'🔗'},
+  {key:'rerank', title:'Rerank 精排', icon:'🎯'},
+  {key:'sort', title:'综合排序', icon:'📊'},
+  {key:'generate', title:'LLM 生成', icon:'✨'},
+];
+
+let stageData = {};
+
+function setQuery(q) {
+  document.getElementById('queryInput').value = q;
+  submitQuery();
+}
+
+function submitQuery() {
+  const query = document.getElementById('queryInput').value.trim();
+  if (!query) return;
+  const hyde = document.getElementById('hydeCheck').checked;
+  const btn = document.getElementById('queryBtn');
+  btn.disabled = true;
+  btn.textContent = '查询中...';
+
+  stageData = {};
+  const pipelineEl = document.getElementById('pipelineSection');
+  pipelineEl.style.display = 'block';
+  pipelineEl.innerHTML = STAGES.map(s => `
+    <div class="stage-card" id="card-${s.key}">
+      <div class="stage-header" onclick="toggleCard('${s.key}')">
+        <div class="stage-icon" id="icon-${s.key}">${s.icon}</div>
+        <div class="stage-title">${s.title}</div>
+        <div class="stage-badge" id="badge-${s.key}">等待中</div>
+        <span class="stage-duration" id="dur-${s.key}"></span>
+      </div>
+      <div class="stage-body" id="body-${s.key}"></div>
+    </div>
+  `).join('');
+
+  document.getElementById('answerSection').style.display = 'none';
+  document.getElementById('commentsSection').style.display = 'none';
+
+  const evtSource = new EventSource(`/api/query?_t=${Date.now()}`);
+  fetch('/api/query', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({query, hyde})
+  }).then(res => {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    function read() {
+      reader.read().then(({done, value}) => {
+        if (done) { finish(); return; }
+        buffer += decoder.decode(value, {stream:true});
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') { finish(); return; }
+            try { handleEvent(JSON.parse(data)); } catch(e) {}
+          }
+        }
+        read();
+      });
+    }
+    read();
+  }).catch(err => {
+    console.error(err);
+    finish();
+  });
+
+  function finish() {
+    btn.disabled = false;
+    btn.textContent = '提问';
+  }
+}
+
+function handleEvent(msg) {
+  if (msg.stage === 'error') {
+    const card = document.getElementById('card-' + msg.stage);
+    return;
+  }
+
+  if (msg.stage === 'result') {
+    showAnswer(msg);
+    return;
+  }
+
+  const key = msg.stage;
+  const card = document.getElementById('card-' + key);
+  const icon = document.getElementById('icon-' + key);
+  const badge = document.getElementById('badge-' + key);
+  const dur = document.getElementById('dur-' + key);
+  const body = document.getElementById('body-' + key);
+
+  if (!card) return;
+  stageData[key] = msg;
+
+  if (msg.status === 'running') {
+    card.className = 'stage-card active expanded';
+    badge.textContent = '进行中';
+    icon.innerHTML = '<span class="spinner"></span>';
+    body.innerHTML = `<div class="stage-detail"><div class="value" style="color:var(--color-text-muted)">${msg.detail || '处理中...'}</div></div>`;
+  }
+
+  if (msg.status === 'done') {
+    card.className = 'stage-card done expanded';
+    badge.textContent = '完成';
+    dur.textContent = msg.duration ? `${msg.duration}s` : '';
+    icon.textContent = STAGES.find(s=>s.key===key)?.icon || '✓';
+
+    let detail = '';
+    if (key === 'query_process') {
+      if (msg.intent) {
+        const items = [];
+        if (msg.intent.room_type) items.push(`房型: <code>${msg.intent.room_type}</code>`);
+        if (msg.intent.fuzzy_room_type) items.push(`模糊房型: <code>${msg.intent.fuzzy_room_type}</code>`);
+        if (msg.intent.time_sensitivity) items.push('关注时效性');
+        detail += items.length ? `<div class="label">意图识别</div><div class="value">${items.join(' · ')}</div>` : `<div class="label">意图识别</div><div class="value">未指定特殊偏好</div>`;
+      }
+      if (msg.sub_queries?.length) {
+        detail += `<div class="label">子查询</div>`;
+        for (const sq of msg.sub_queries) {
+          detail += `<div class="sub-query"><span>${sq.query}</span><span class="weight">${sq.weight}</span></div>`;
+        }
+      }
+      if (msg.hyde) {
+        detail += `<div class="label">HyDE 假设回答</div><div class="value"><code>${msg.hyde}</code></div>`;
+      }
+    }
+    if (key === 'recall') {
+      if (msg.summary_categories?.length) {
+        detail += `<div class="label">召回摘要类别</div><div class="value">${msg.summary_categories.map(c=>`<code>${c}</code>`).join(' ')}</div>`;
+      }
+    }
+    if (key === 'fusion') {
+      detail += `<div class="label">融合结果</div><div class="value">合并后共 <code>${msg.fused_count}</code> 条候选评论</div>`;
+    }
+    if (key === 'rerank') {
+      detail += `<div class="label">精排结果</div><div class="value">筛选出最相关的 <code>${msg.reranked_count}</code> 条</div>`;
+    }
+    if (key === 'sort') {
+      detail += `<div class="label">综合排序</div><div class="value">按 相关性 40% · 质量 25% · 时效 20% · 其他 15% 加权</div>`;
+    }
+    if (key === 'generate') {
+      detail += `<div class="label">生成完成</div><div class="value">耗时 <code>${msg.duration}s</code></div>`;
+    }
+
+    body.innerHTML = detail ? `<div class="stage-detail">${detail}</div>` : '';
+  }
+}
+
+function toggleCard(key) {
+  const card = document.getElementById('card-' + key);
+  card.classList.toggle('expanded');
+}
+
+function showAnswer(msg) {
+  const ansEl = document.getElementById('answerSection');
+  ansEl.style.display = 'block';
+  ansEl.innerHTML = `
+    <div class="answer-card">
+      <h2><span class="icon">💬</span> 回答</h2>
+      <div class="answer-content">${formatAnswer(msg.answer)}</div>
+    </div>
+  `;
+
+  if (msg.top_comments?.length) {
+    const comEl = document.getElementById('commentsSection');
+    comEl.style.display = 'block';
+    comEl.innerHTML = `<h3>🏆 相关评论 Top ${msg.top_comments.length}</h3>` +
+      msg.top_comments.map(c => `
+        <div class="comment-card">
+          <div class="comment-meta">
+            <span class="comment-rank">#${c.rank}</span>
+            <span class="comment-tag">${c.room_type || '未知房型'}</span>
+            <span class="comment-tag">评分 ${c.score_val}</span>
+            <span class="comment-tag">${c.publish_date}</span>
+            <span class="comment-score">综合 ${c.score} · Rerank ${c.rerank_score}</span>
+          </div>
+          <div class="comment-text">${escapeHtml(c.comment)}</div>
+        </div>
+      `).join('');
+  }
+
+  ansEl.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function formatAnswer(text) {
+  return escapeHtml(text)
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+}
+
+function escapeHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str;
+  return d.innerHTML;
+}
+
+document.getElementById('queryInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitQuery();
+});
+</script>
+</body>
+</html>
