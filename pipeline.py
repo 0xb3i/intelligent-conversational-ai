@@ -412,12 +412,15 @@ class HotelReviewRAG:
         recall_list = []
         for doc_id, score in results:
             meta = self.metadata.get(str(doc_id), {})
+            score_val = meta.get("score", 0)
+            meta = {k: v for k, v in meta.items() if k != "score"}
             recall_list.append(
                 RecallResult(
                     doc_id=str(doc_id),
                     score=score,
                     source="text",
                     query_idx=query_idx,
+                    score_val=score_val,
                     **meta,
                 )
             )

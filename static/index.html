@@ -193,7 +193,6 @@ function submitQuery() {
   document.getElementById('answerSection').style.display = 'none';
   document.getElementById('commentsSection').style.display = 'none';
 
-  const evtSource = new EventSource(`/api/query?_t=${Date.now()}`);
   fetch('/api/query', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},

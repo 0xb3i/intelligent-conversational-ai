@@ -3,11 +3,15 @@ import json
 import time
 import queue
 import threading
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Flask, request, Response, send_from_directory
 from flask_cors import CORS
 
 from pipeline import HotelReviewRAG
+
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
+log = logging.getLogger("rag")
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 CORS(app)
@@ -30,11 +34,14 @@ def get_rag():
 def run_query_stream(query, enable_hyde, q):
     rag = get_rag()
     try:
+        log.info(f"开始查询: {query}")
         q.put({"stage": "query_process", "status": "running", "detail": "正在分析您的问题..."})
 
         t0 = time.time()
+        log.info("[1/6] 查询处理 - 意图识别...")
         query_info = rag._process_query(query, enable_hyde=enable_hyde)
         t_process = time.time() - t0
+        log.info(f"[1/6] 查询处理完成: {t_process:.2f}s, 子查询数={len(query_info.sub_queries)}")
 
         q.put({
             "stage": "query_process", "status": "done", "duration": round(t_process, 2),
@@ -51,10 +58,22 @@ def run_query_stream(query, enable_hyde, q):
 
         def _recall_for_subquery(qi, sq):
             sub_q = sq["query"]
+            log.info(f"  [2/6] 子查询{qi} 文本召回...")
             text_r = rag._recall_text(sub_q, qi, rag.topk_recall)
+            log.info(f"  [2/6] 子查询{qi} 文本召回完成: {len(text_r)} 条")
+
+            log.info(f"  [2/6] 子查询{qi} 向量召回...")
             vector_r = rag._recall_vector(sub_q, qi, rag.topk_recall, query_info.intent)
+            log.info(f"  [2/6] 子查询{qi} 向量召回完成: {len(vector_r)} 条")
+
+            log.info(f"  [2/6] 子查询{qi} 反向召回...")
             reverse_r = rag._recall_reverse(sub_q, qi, rag.topk_recall, query_info.intent)
+            log.info(f"  [2/6] 子查询{qi} 反向召回完成: {len(reverse_r)} 条")
+
+            log.info(f"  [2/6] 子查询{qi} 摘要召回...")
             summary_r = rag._recall_summary(sub_q, qi)
+            log.info(f"  [2/6] 子查询{qi} 摘要召回完成: {len(summary_r)} 条")
+
             return text_r, vector_r, reverse_r, summary_r
 
         with ThreadPoolExecutor(max_workers=3) as executor:
@@ -63,13 +82,20 @@ def run_query_stream(query, enable_hyde, q):
                 for qi, sq in enumerate(query_info.sub_queries)
             }
             for future in as_completed(futures):
-                text_r, vector_r, reverse_r, summary_r = future.result()
-                all_recalls.extend([text_r, vector_r, reverse_r])
-                all_summaries.extend(summary_r)
+                qi = futures[future]
+                try:
+                    text_r, vector_r, reverse_r, summary_r = future.result()
+                    all_recalls.extend([text_r, vector_r, reverse_r])
+                    all_summaries.extend(summary_r)
+                    log.info(f"  子查询{qi} 全部召回完成")
+                except Exception as e:
+                    log.error(f"  子查询{qi} 召回失败: {e}")
 
         if enable_hyde and query_info.hyde_answer:
+            log.info("  [2/6] HyDE 召回...")
             all_recalls.append(rag._recall_hyde(query_info.hyde_answer, rag.topk_recall, query_info.intent))
         t_retrieve = time.time() - t0
+        log.info(f"[2/6] 多路召回完成: {t_retrieve:.2f}s")
 
         seen = set()
         unique_summaries = []
@@ -83,28 +109,40 @@ def run_query_stream(query, enable_hyde, q):
             "summary_categories": [s.category for s in unique_summaries],
         })
 
+        log.info("[3/6] RRF 融合...")
         q.put({"stage": "fusion", "status": "running", "detail": "正在融合多路检索结果..."})
         t0 = time.time()
         fused = rag._rrf_fuse(all_recalls)
-        q.put({"stage": "fusion", "status": "done", "duration": round(time.time() - t0, 2), "fused_count": len(fused)})
+        t_fusion = time.time() - t0
+        log.info(f"[3/6] RRF 融合完成: {t_fusion:.2f}s, {len(fused)} 条候选")
+        q.put({"stage": "fusion", "status": "done", "duration": round(t_fusion, 2), "fused_count": len(fused)})
 
+        log.info("[4/6] Rerank 精排...")
         q.put({"stage": "rerank", "status": "running", "detail": "正在用 Rerank 模型精排..."})
         t0 = time.time()
         rerank_candidates = fused[: rag.topk_rerank * 2]
         reranked = rag._rerank(query, rerank_candidates, rag.topk_rerank)
-        q.put({"stage": "rerank", "status": "done", "duration": round(time.time() - t0, 2), "reranked_count": len(reranked)})
+        t_rerank = time.time() - t0
+        log.info(f"[4/6] Rerank 完成: {t_rerank:.2f}s, {len(reranked)} 条")
+        q.put({"stage": "rerank", "status": "done", "duration": round(t_rerank, 2), "reranked_count": len(reranked)})
 
+        log.info("[5/6] 综合排序...")
         q.put({"stage": "sort", "status": "running", "detail": "正在综合排序..."})
         t0 = time.time()
         time_sensitive = query_info.intent.get("time_sensitivity") is not None
         ranked = rag._composite_score(reranked, time_sensitive=time_sensitive)
         top_comments = ranked[: rag.topk_final]
-        q.put({"stage": "sort", "status": "done", "duration": round(time.time() - t0, 2)})
+        t_sort = time.time() - t0
+        log.info(f"[5/6] 综合排序完成: {t_sort:.2f}s")
+        q.put({"stage": "sort", "status": "done", "duration": round(t_sort, 2)})
 
+        log.info("[6/6] LLM 生成回答...")
         q.put({"stage": "generate", "status": "running", "detail": "正在生成回答..."})
         t0 = time.time()
         answer = rag._generate_answer(query, top_comments, unique_summaries)
-        q.put({"stage": "generate", "status": "done", "duration": round(time.time() - t0, 2)})
+        t_gen = time.time() - t0
+        log.info(f"[6/6] LLM 生成完成: {t_gen:.2f}s")
+        q.put({"stage": "generate", "status": "done", "duration": round(t_gen, 2)})
 
         comments_data = []
         for c in top_comments:
@@ -128,7 +166,11 @@ def run_query_stream(query, enable_hyde, q):
             "top_comments": comments_data,
         })
 
+        total = t_process + t_retrieve + t_fusion + t_rerank + t_sort + t_gen
+        log.info(f"查询完成! 总耗时: {total:.2f}s")
+
     except Exception as e:
+        log.error(f"查询出错: {e}", exc_info=True)
         q.put({"stage": "error", "status": "error", "message": str(e)})
     finally:
         q.put(None)
