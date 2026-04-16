@@ -7,33 +7,33 @@
 ### 整体 Pipeline 流程
 
 ```mermaid
-flowchart TD
-    Q[用户查询] --> QP[查询处理模块]
+flowchart LR
+    Q[👤 用户提问] --> QP
 
-    subgraph QP [1. 查询处理]
+    subgraph QP [① 查询处理]
         direction TB
-        Q1[意图识别<br/>LLM → room_type / fuzzy_room_type / time_sensitivity]
-        Q2[意图扩展<br/>LLM → 2~3 个子查询 + 权重]
-        Q3[HyDE 生成<br/>可选 · LLM 生成假设性回答]
+        Q1["🔍 意图识别<br/>识别用户是否指定了房型偏好<br/>或关注近期评论"]
+        Q2["🔀 意图扩展<br/>将一个问题拆成 2~3 个子问题<br/>分别覆盖不同角度"]
+        Q3["🔮 HyDE 生成（可选）<br/>先让 AI 假拟一份回答<br/>再用这份回答去检索"]
         Q1 --> Q2 --> Q3
     end
 
-    QP --> RC[多路召回模块]
+    QP --> RC
 
-    subgraph RC [2. 多路召回]
-        direction LR
-        R1[📖 文本召回<br/>BM25 倒排索引]
-        R2[🔍 向量召回<br/>DashVector 评论库]
-        R3[🔄 反向 Query 召回<br/>DashVector 反向库]
-        R4[🔮 HyDE 召回<br/>可选 · DashVector 评论库]
-        R5[📋 摘要召回<br/>ChromaDB 摘要库]
+    subgraph RC [② 多路召回]
+        direction TB
+        R1["📖 文本召回<br/>按关键词精确匹配<br/>如「花园大床房」「早餐」"]
+        R2["🧠 向量召回<br/>按语义相似度匹配<br/>理解问题的「意思」"]
+        R3["🔄 反向 Query 召回<br/>用预生成的反问句匹配<br/>如「早餐好不好」↔ 评论"]
+        R4["🔮 HyDE 召回（可选）<br/>用 AI 拟答的向量检索"]
+        R5["📋 摘要召回<br/>先找到相关话题的综述<br/>如「安静程度」「卫生状况」"]
     end
 
-    RC --> RRF[3. RRF 融合<br/>多路结果合并去重]
-    RRF --> RK[4. Rerank 精排<br/>Qwen3-Rerank]
-    RK --> CS[5. 综合排序<br/>相关性 + 质量 + 长度 + 评论数 + 点赞 + 时效]
-    CS --> LLM[6. LLM 生成回答<br/>Qwen-Plus]
-    LLM --> A[最终回答]
+    RC --> FUSION["③ RRF 融合<br/>把五路结果合并去重<br/>按排名加权打分"]
+    FUSION --> RERANK["④ Rerank 精排<br/>用交叉编码器逐条打分<br/>筛选出最相关的 40 条"]
+    RERANK --> SORT["⑤ 综合排序<br/>相关性 40% · 质量 25%<br/>时效 20% · 其他 15%"]
+    SORT --> GEN["⑥ LLM 生成<br/>把摘要 + 精选评论<br/>交给大模型撰写回答"]
+    GEN --> A["📝 最终回答"]
 ```
 
 ### 数据流与存储架构
@@ -41,37 +41,40 @@ flowchart TD
 ```mermaid
 flowchart LR
     subgraph 离线构建
-        CSV1[filtered_comments.csv] --> EMB1[Text Embedding<br/>text-embedding-v4]
-        CSV2[reverse_queries.csv] --> EMB2[Text Embedding<br/>text-embedding-v4]
-        JSON1[category_summaries.json] --> EMB3[Text Embedding<br/>text-embedding-v4]
-        CSV1 --> BM25[BM25 倒排索引<br/>inverted_index.pkl]
+        direction TB
+        CSV1["📋 评论数据<br/>filtered_comments.csv"] --> EMB1["🧮 文本向量化<br/>text-embedding-v4"]
+        CSV2["📋 反向问题数据<br/>reverse_queries.csv"] --> EMB2["🧮 文本向量化"]
+        JSON1["📋 分类摘要<br/>category_summaries.json"] --> EMB3["🧮 文本向量化"]
+        CSV1 --> BM25["📑 构建倒排索引<br/>jieba 分词 → BM25"]
     end
 
     subgraph 在线存储
-        EMB1 --> DV1[(DashVector<br/>comment_database)]
-        EMB2 --> DV2[(DashVector<br/>reverse_query_database)]
-        EMB3 --> CDB[(ChromaDB<br/>summary_database)]
-        BM25 --> IDX[inverted_index.pkl<br/>本地文件]
+        direction TB
+        EMB1 --> DV1[("☁️ DashVector<br/>评论向量库")]
+        EMB2 --> DV2[("☁️ DashVector<br/>反向问题向量库")]
+        EMB3 --> CDB[("💾 ChromaDB<br/>摘要向量库")]
+        BM25 --> IDX["💿 本地文件<br/>inverted_index.pkl"]
     end
 
     subgraph 在线检索
-        DV1 --> V[向量召回]
-        DV2 --> R[反向召回]
-        CDB --> S[摘要召回]
-        IDX --> T[文本召回]
+        direction TB
+        DV1 --> V["🧠 向量召回"]
+        DV2 --> R["🔄 反向召回"]
+        CDB --> S["📋 摘要召回"]
+        IDX --> T["📖 文本召回"]
     end
 ```
 
 ### 综合排序权重
 
 ```mermaid
-pie title 综合排序权重分配
-    "相关性 (Rerank)" : 40
-    "质量评分 (quality_score)" : 25
-    "时效性 (publish_date)" : 20
-    "评论长度 (comment_len)" : 5
-    "评论数 (review_count)" : 5
-    "点赞数 (useful_count)" : 5
+pie title 综合排序：六维度加权打分
+    "相关性（Rerank 模型打分）" : 40
+    "质量评分（评论质量等级）" : 25
+    "时效性（发布日期越近越高）" : 20
+    "评论长度（内容越详细越高）" : 5
+    "评论数（该评论被回复数量）" : 5
+    "点赞数（有用投票数量）" : 5
 ```
 
 ## 项目结构
