@@ -10,6 +10,30 @@ import { StarRating } from '@/components/ui';
 import { preprocessCitations, validateRefs } from '@/lib/citation-parser';
 import { CitationBadge } from './CitationBadge';
 
+/**
+ * 高亮 RAG 命中的关键句（按字符跨度直接切片包裹 <mark>）。
+ * span 越界或为空时返回原文。
+ */
+function highlightChunkSpan(
+  text: string,
+  span: { char_start: number; char_end: number } | null | undefined
+): React.ReactNode[] {
+  if (!span) return [text];
+  const start = Math.max(0, span.char_start ?? 0);
+  const end = Math.min(text.length, span.char_end ?? 0);
+  if (end <= start) return [text];
+  return [
+    text.slice(0, start),
+    <mark
+      key="rag-hit"
+      className="bg-amber-200 text-amber-900 rounded-[2px] px-0.5 not-italic"
+    >
+      {text.slice(start, end)}
+    </mark>,
+    text.slice(end),
+  ];
+}
+
 interface Props {
   role: 'user' | 'assistant';
   content: string;
@@ -300,7 +324,9 @@ export function ChatMessage({ role, content, references, loading, loadingText, s
                       </button>
                     </div>
                     <p className={cn('text-sm text-gray-600', !isExpanded && 'line-clamp-3')}>
-                      {ref.comment}
+                      {ref.primary_chunk
+                        ? highlightChunkSpan(ref.comment, ref.primary_chunk)
+                        : ref.comment}
                     </p>
                     {isExpanded && ref.images && ref.images.length > 0 && (
                       <div className="mt-2 flex flex-wrap gap-2">

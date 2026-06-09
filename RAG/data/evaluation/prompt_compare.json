@@ -1,0 +1,444 @@
+{
+  "summary": {
+    "retrieval": {
+      "v0": {
+        "avg_chars": 1639.6,
+        "max_chars": 1696,
+        "min_chars": 1616
+      },
+      "v1": {
+        "avg_chars": 1261.7,
+        "max_chars": 1304,
+        "min_chars": 1244
+      }
+    },
+    "chitchat": {
+      "v0": {
+        "avg_chars": 170.2,
+        "max_chars": 174,
+        "min_chars": 168
+      },
+      "v1": {
+        "avg_chars": 153.2,
+        "max_chars": 157,
+        "min_chars": 151
+      }
+    },
+    "v0_has_output_contract_rate": 0.0,
+    "v1_has_output_contract_rate": 1.0,
+    "v0_has_self_check_rate": 0.0,
+    "v1_has_self_check_rate": 1.0
+  },
+  "retrieval_samples": [
+    {
+      "question": "我家小孩才三岁，想知道房间里有没有什么不安全的设计，比如尖角家具或者没有防护的落地窗之类的。",
+      "v0": {
+        "chars": 1696,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1304,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "如果碰上下雨天出不了门，小孩在酒店里能待得住吗，有没有室内能消磨时间的地方。",
+      "v0": {
+        "chars": 1664,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1280,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "我家小孩比较挑食而且对海鲜过敏，早餐能找到合适吃的东西吗。",
+      "v0": {
+        "chars": 1628,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1253,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "飞机可能晚点到比较晚，怕小孩在大堂闹，入住手续能提前处理好吗。",
+      "v0": {
+        "chars": 1636,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1259,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "小孩晚上容易踢被子着凉，能找前台多要一床薄被或者毛毯吗。",
+      "v0": {
+        "chars": 1624,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1250,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "带着老人小孩拖着行李最怕在大堂干等，高峰期入住排队一般要多久。",
+      "v0": {
+        "chars": 1636,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1259,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "我们从广州南站出发，带着婴儿车和一堆行李过去方不方便。",
+      "v0": {
+        "chars": 1620,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1247,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "酒店附近有药店或者24小时便利店吗，怕晚上小孩突然发烧需要买东西。",
+      "v0": {
+        "chars": 1644,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1265,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "想给孩子订个能看到花园绿化的房间，别对着马路那种太吵了不好哄睡。",
+      "v0": {
+        "chars": 1640,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1262,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "看了一下价格不便宜，带娃住这里跟长隆附近的亲子酒店比划得来吗。",
+      "v0": {
+        "chars": 1636,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1259,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "含早的套餐小孩要另外收费吗，加上乐园门票之类的总花费大概什么水平。",
+      "v0": {
+        "chars": 1644,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1265,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "之前带娃住别的酒店踩了不少坑，想听听真实带小孩入住过的人怎么评价。",
+      "v0": {
+        "chars": 1644,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1265,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "小孩九点就要睡了，走廊来回走动的人多不多，隔壁的动静会影响到吗。",
+      "v0": {
+        "chars": 1640,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1262,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "宝宝喜欢在房间地上爬来爬去，地毯和卫生间角落的卫生情况能放心吗。",
+      "v0": {
+        "chars": 1640,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1262,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "经常要在房间里开视频会议，网速和桌面空间能满足一整天的办公需求吗。",
+      "v0": {
+        "chars": 1644,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1265,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "下周要在广州接待重要客户，酒店里有没有比较体面的会谈或洽谈空间。",
+      "v0": {
+        "chars": 1640,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1262,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "一般早上赶着出门开会，早餐能不能快速吃完走人，别是那种等很久上菜的。",
+      "v0": {
+        "chars": 1648,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1268,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "飞机可能晚点到凌晨一两点，那个时间入住会不会有问题。",
+      "v0": {
+        "chars": 1616,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1244,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "衬衫在箱子里皱了需要熨烫，酒店能帮忙处理吗，大概多久能弄好。",
+      "v0": {
+        "chars": 1632,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1256,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    },
+    {
+      "question": "最后一天要赶早班飞机，六点多退房能办吗，流程麻不麻烦。",
+      "v0": {
+        "chars": 1620,
+        "lines": 84,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 1247,
+        "lines": 54,
+        "has_self_check": true,
+        "has_output_contract": true,
+        "has_chitchat_constraint": false
+      }
+    }
+  ],
+  "chitchat_samples": [
+    {
+      "q": "你好啊",
+      "v0": {
+        "chars": 169,
+        "lines": 12,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 152,
+        "lines": 17,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": true
+      }
+    },
+    {
+      "q": "今天天气怎么样？",
+      "v0": {
+        "chars": 174,
+        "lines": 12,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 157,
+        "lines": 17,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": true
+      }
+    },
+    {
+      "q": "你是谁？",
+      "v0": {
+        "chars": 170,
+        "lines": 12,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 153,
+        "lines": 17,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": true
+      }
+    },
+    {
+      "q": "再见",
+      "v0": {
+        "chars": 168,
+        "lines": 12,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": false
+      },
+      "v1": {
+        "chars": 151,
+        "lines": 17,
+        "has_self_check": false,
+        "has_output_contract": false,
+        "has_chitchat_constraint": true
+      }
+    }
+  ]
+}

@@ -116,17 +116,18 @@ async def chat(request: ChatRequest):
         raise HTTPException(status_code=503, detail="RAG 系统未就绪")
 
     enable_generation = request.options.get("enable_generation", True)
+    query_options = {k: v for k, v in request.options.items() if k != "enable_generation"}
+    query_options.setdefault("enable_hyde", False)
 
     # 非流式：只返回检索结果
     if not enable_generation:
         try:
             result = rag_system.query(
                 request.query.strip(),
-                enable_hyde=False,
                 enable_generation=False,
                 print_response=False,
                 history=request.history,
-                **{k: v for k, v in request.options.items() if k != "enable_generation"}
+                **query_options
             )
 
             # 转换评论格式
@@ -152,14 +153,13 @@ async def chat(request: ChatRequest):
     _SENTINEL = object()
 
     query_text = request.query.strip()
-    query_options = {k: v for k, v in request.options.items() if k != "enable_generation"}
     query_history = request.history
 
     def _run_query_stream():
         """在线程池中运行同步 RAG 流水线，通过 queue 推送事件"""
         try:
             for event in rag_system.query_stream(
-                query_text, enable_hyde=False, history=query_history, **query_options
+                query_text, history=query_history, **query_options
             ):
                 event_type = event.get("type")
 
@@ -241,6 +241,7 @@ def _format_comments(raw_comments: list) -> list:
         formatted.append(_sanitize({
             "_id": str(comment_id),
             "comment": str(c.get('comment', '')),
+            "primary_chunk": c.get('primary_chunk'),
             "score": meta.get('score', 0),
             "star": full_data.get('star', int(meta.get('score', 0))),
             "useful_count": meta.get('useful_count', 0),

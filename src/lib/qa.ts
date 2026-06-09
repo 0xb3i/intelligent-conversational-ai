@@ -134,10 +134,38 @@ function mapToComment(raw: Record<string, unknown>): Comment {
     (c): c is StandardCategory => c !== null
   );
 
+  // primary_chunk 透传（可能为 null/undefined）
+  const rawChunk = raw.primary_chunk as Record<string, unknown> | null | undefined;
+  const primary_chunk = rawChunk
+    ? {
+        chunk_id: String(rawChunk.chunk_id || ''),
+        text: String(rawChunk.text || ''),
+        char_start: Number(rawChunk.char_start ?? 0),
+        char_end: Number(rawChunk.char_end ?? 0),
+        seq: Number(rawChunk.seq ?? 0),
+      }
+    : null;
+
+  // images 可能是数组、JSON 字符串、或缺失，统一规范成 string[]
+  const rawImages = raw.images;
+  let images: string[] = [];
+  if (Array.isArray(rawImages)) {
+    images = rawImages.map((v) => String(v));
+  } else if (typeof rawImages === 'string' && rawImages.trim()) {
+    try {
+      const parsed = JSON.parse(rawImages);
+      if (Array.isArray(parsed)) {
+        images = parsed.map((v) => String(v));
+      }
+    } catch {
+      // 解析失败则视为无图片
+    }
+  }
+
   return {
     _id: String(raw._id || ''),
     comment: String(raw.comment || ''),
-    images: (raw.images as string[]) || [],
+    images,
     score: Number(raw.score || 0),
     star: Number(raw.star || raw.score || 0),
     useful_count: Number(raw.useful_count || 0),
@@ -151,5 +179,6 @@ function mapToComment(raw: Record<string, unknown>): Comment {
     category2,
     category3,
     categories,
+    primary_chunk,
   };
 }

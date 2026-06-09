@@ -1,6 +1,7 @@
 """酒店评论 RAG 系统：完整的检索增强生成工作流"""
 
 import time
+import pickle
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +17,7 @@ from modules.intent import IntentRecognizer, IntentDetector, IntentExpander, HyD
 from modules.retriever import HybridRetriever
 from modules.ranker import Reranker, MultiFactorRanker
 from modules.generator import ResponseGenerator
-from utils.database import get_all_comments_from_insforge
+from utils.database import load_comments
 
 
 class HotelReviewRAG:
@@ -57,11 +58,24 @@ class HotelReviewRAG:
         self.inverted_index = InvertedIndex()
         self.inverted_index.load(str(data_dir / "inverted_index.pkl"))
 
+        # 可选：加载 chunked BM25 索引 + chunk_meta（优化项 2）
+        self.chunked_index = None
+        self.chunk_meta = None
+        chunked_index_path = data_dir / "inverted_index_chunked.pkl"
+        chunk_meta_path = data_dir / "chunk_meta.pkl"
+        if chunked_index_path.exists() and chunk_meta_path.exists():
+            self.chunked_index = InvertedIndex()
+            self.chunked_index.load(str(chunked_index_path))
+            with open(chunk_meta_path, "rb") as f:
+                self.chunk_meta = pickle.load(f)
+            print(f"已加载 chunked 索引: {self.chunked_index.num_docs} chunks, "
+                  f"{len(self.chunk_meta)} meta entries")
+
         # 加载评论数据
         if df_comments is not None:
             self.df_comments = df_comments
         else:
-            self.df_comments = get_all_comments_from_insforge()
+            self.df_comments = load_comments()
 
         # 确定 API Key
         key = intl_api_key if intl_api_key else api_key
@@ -80,7 +94,8 @@ class HotelReviewRAG:
         self.retriever = HybridRetriever(
             self.inverted_index, self.comments_collection,
             self.reverse_queries_collection, self.summaries_collection,
-            embedding_client, self.df_comments, self.hyde_generator
+            embedding_client, self.df_comments, self.hyde_generator,
+            chunked_index=self.chunked_index, chunk_meta=self.chunk_meta
         )
         self.reranker = Reranker(key)
         self.generator = ResponseGenerator(key, model=generation_model)
@@ -266,6 +281,7 @@ class HotelReviewRAG:
             comment_data = {
                 'comment_id': c['comment_id'],
                 'comment': c['comment'],
+                'primary_chunk': c.get('primary_chunk'),
                 'rrf_score': c['rrf_score'],
                 'rrf_rank': c['rrf_rank'],
                 'route_ranks': c['route_ranks'],
@@ -428,6 +444,7 @@ class HotelReviewRAG:
             comment_data = {
                 'comment_id': c['comment_id'],
                 'comment': c['comment'],
+                'primary_chunk': c.get('primary_chunk'),
                 'metadata': c['metadata']
             }
             if enable_ranking:

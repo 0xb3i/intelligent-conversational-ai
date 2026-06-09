@@ -26,11 +26,37 @@ function highlightText(text: string, keyword: string): React.ReactNode[] {
   );
 }
 
+/**
+ * 高亮 RAG 命中的关键句（按字符跨度直接切片包裹 <mark>）。
+ * 当 char_start/end 越界或为空时返回原文，保持鲁棒。
+ */
+function highlightChunkSpan(
+  text: string,
+  span: { char_start: number; char_end: number } | null | undefined
+): React.ReactNode[] {
+  if (!span) return [text];
+  const start = Math.max(0, span.char_start ?? 0);
+  const end = Math.min(text.length, span.char_end ?? 0);
+  if (end <= start) return [text];
+  return [
+    text.slice(0, start),
+    <mark
+      key="rag-hit"
+      className="bg-amber-200 text-amber-900 rounded-[2px] px-0.5 not-italic"
+    >
+      {text.slice(start, end)}
+    </mark>,
+    text.slice(end),
+  ];
+}
+
 export function CommentCard({ comment, onClick, keyword = '' }: Props) {
   const [showFullText, setShowFullText] = useState(false);
   const [showGallery, setShowGallery] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
-  const isLongText = comment.comment.length > 200;
+  // 命中关键句存在时强制展示全文，避免折叠切断高亮位置
+  const hasChunkHit = !!comment.primary_chunk;
+  const isLongText = comment.comment.length > 200 && !hasChunkHit;
 
   // 打开图片画廊
   const openGallery = (index: number, e: React.MouseEvent) => {
@@ -87,10 +113,14 @@ export function CommentCard({ comment, onClick, keyword = '' }: Props) {
         {/* 评论内容 */}
         <div className="mb-3">
           <p className="text-gray-700 leading-relaxed whitespace-pre-line">
-            {highlightText(
-              isLongText && !showFullText ? comment.comment.slice(0, 200) + '...' : comment.comment,
-              keyword
-            )}
+            {hasChunkHit
+              ? highlightChunkSpan(comment.comment, comment.primary_chunk)
+              : highlightText(
+                  isLongText && !showFullText
+                    ? comment.comment.slice(0, 200) + '...'
+                    : comment.comment,
+                  keyword
+                )}
           </p>
           {isLongText && (
             <button

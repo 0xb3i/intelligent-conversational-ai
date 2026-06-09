@@ -9,7 +9,15 @@ class HybridRetriever:
     """混合检索器：多路召回 + RRF 融合"""
 
     def __init__(self, inverted_index, comments_collection, reverse_queries_collection,
-                 summaries_collection, embedding_client, df_comments, hyde_generator):
+                 summaries_collection, embedding_client, df_comments, hyde_generator,
+                 chunked_index=None, chunk_meta=None):
+        """
+        参数:
+            chunked_index: 可选，chunk 级 BM25 倒排索引（InvertedIndex）。提供后
+                BM25 路改为在 chunk 上检索，再按 comment_id 折叠回评论级别。
+            chunk_meta: 可选，{chunk_id: {comment_id, seq, char_start, char_end, text}}
+                用于把命中 chunk 折叠回 comment 并透出 primary_chunk 的字符跨度。
+        """
         self.inverted_index = inverted_index
         self.comments_collection = comments_collection
         self.reverse_queries_collection = reverse_queries_collection
@@ -17,6 +25,17 @@ class HybridRetriever:
         self.embedding_client = embedding_client
         self.hyde_generator = hyde_generator
         self.df_comments = df_comments
+        self.chunked_index = chunked_index
+        self.chunk_meta = chunk_meta or {}
+        # comment_id → 该评论的 chunk_id 列表（按 seq 升序）
+        self._comment_to_chunks: dict[str, list[str]] = {}
+        if self.chunk_meta:
+            tmp: dict[str, list[tuple[int, str]]] = {}
+            for cid_, m in self.chunk_meta.items():
+                tmp.setdefault(m['comment_id'], []).append((m['seq'], cid_))
+            for k, v in tmp.items():
+                v.sort()
+                self._comment_to_chunks[k] = [cid for _, cid in v]
 
     def retrieve(self, rewritten_queries, room_type=None, fuzzy_room_type=None, topk=150,
                  final_topk=100, enable_bm25=True, enable_vector=True,
@@ -120,6 +139,8 @@ class HybridRetriever:
             comment_row = self.df_comments.loc[doc_id]
 
             route_ranks = {}
+            primary_chunk = None
+            best_chunk_rank = None
             for route_name, results in route_results.items():
                 for d_id, r_name, rank, metadata in results:
                     if d_id == doc_id:
@@ -129,10 +150,30 @@ class HybridRetriever:
                             'rank': rank,
                             'metadata': metadata
                         })
+                        # BM25 chunked 路会带 primary_chunk；取 rank 最靠前的
+                        if metadata.get('primary_chunk') and (
+                            best_chunk_rank is None or rank < best_chunk_rank
+                        ):
+                            primary_chunk = metadata['primary_chunk']
+                            best_chunk_rank = rank
+
+            comment_text = comment_row['comment']
+            # 兜底：未命中 chunk 时，把首个 chunk 当代表（如果 chunk_meta 可用）
+            if primary_chunk is None and self._comment_to_chunks.get(doc_id):
+                first_id = self._comment_to_chunks[doc_id][0]
+                first_chunk = self.chunk_meta[first_id]
+                primary_chunk = {
+                    'chunk_id': first_id,
+                    'text': first_chunk['text'],
+                    'char_start': first_chunk['char_start'],
+                    'char_end': first_chunk['char_end'],
+                    'seq': first_chunk['seq'],
+                }
 
             final_comment_results.append({
                 'comment_id': doc_id,
-                'comment': comment_row['comment'],
+                'comment': comment_text,
+                'primary_chunk': primary_chunk,
                 'rrf_score': rrf_score,
                 'rrf_rank': rrf_ranks[doc_id],
                 'route_ranks': route_ranks,
@@ -158,7 +199,7 @@ class HybridRetriever:
     # ── BM25 路 ──────────────────────────────────────────────
 
     def _route_bm25(self, queries, topk):
-        """第一路：BM25 文本召回"""
+        """第一路：BM25 文本召回。chunked_index 存在时走 chunk 级检索 + 折叠。"""
         start = time.time()
         results = []
         with ThreadPoolExecutor(max_workers=len(queries)) as executor:
@@ -171,6 +212,37 @@ class HybridRetriever:
         return results, time.time() - start
 
     def _single_bm25_query(self, query_idx, query, topk):
+        # 优先使用 chunked 索引：每个 query 取 topk * 5 条 chunk，按 comment_id 折叠到 topk
+        if self.chunked_index is not None and self.chunk_meta:
+            raw = self.chunked_index.search(query, topk=topk * 5)
+            seen = {}
+            collapsed = []
+            for chunk_id, score in raw:
+                meta = self.chunk_meta.get(chunk_id)
+                if not meta:
+                    continue
+                cid = meta["comment_id"]
+                if cid in seen:
+                    continue
+                seen[cid] = True
+                collapsed.append((cid, score, chunk_id, meta))
+                if len(collapsed) >= topk:
+                    break
+            return [
+                (cid, 'bm25', rank, {
+                    'query_idx': query_idx,
+                    'primary_chunk': {
+                        'chunk_id': chunk_id,
+                        'text': meta['text'],
+                        'char_start': meta['char_start'],
+                        'char_end': meta['char_end'],
+                        'seq': meta['seq'],
+                    },
+                })
+                for rank, (cid, _score, chunk_id, meta) in enumerate(collapsed, 1)
+            ]
+
+        # 回退：旧的整条评论 BM25
         bm25_results = self.inverted_index.search(query, topk=topk)
         return [(doc_id, 'bm25', rank, {'query_idx': query_idx})
                 for rank, (doc_id, score) in enumerate(bm25_results, 1)]

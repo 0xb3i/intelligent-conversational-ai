@@ -1,126 +1,107 @@
 """回复生成器：基于检索上下文生成最终回复"""
 
+import re
 import time
 from datetime import datetime
 from dashscope import Generation
+
+from modules.prompts import build_prompt, PROMPT_VERSION
+
+
+# 引用违规兜底：把 [[ref:1]][[ref:2]] 之类的连续引用合并为 [[ref:1,2]]
+_REF_ADJ_RE = re.compile(r"\[\[ref:([0-9,\s]+)\]\]\s*\[\[ref:([0-9,\s]+)\]\]")
+_REF_RE = re.compile(r"\[\[ref:([0-9,\s]+)\]\]")
+# 模型有时会把"等"塞进 ]] 内部：[[ref:1,3,等]] → 提到 ]] 外面：[[ref:1,3]]等
+_REF_ETC_INSIDE_RE = re.compile(r"\[\[ref:([0-9,\s]+?)[,，]?\s*等\s*\]\]")
+# 自校验过程不应被输出，发现"自校验"开头的尾段就截断
+_SELF_CHECK_TAIL_RE = re.compile(r"\n+#?\s*自校验[\s\S]*$")
+
+
+def _merge_refs(match: re.Match) -> str:
+    """合并连续两个 [[ref:..]] 标记，去重并保序，最多保留前 3 条。
+    超出时输出 `[[ref:N,M]]等`（"等"在 ]] 之外），与前端 citation-parser 契约一致。"""
+    parts = (match.group(1) + "," + match.group(2)).split(",")
+    seen = []
+    for p in parts:
+        p = p.strip()
+        if p and p not in seen:
+            seen.append(p)
+    if len(seen) > 3:
+        return f"[[ref:{','.join(seen[:2])}]]等"
+    return f"[[ref:{','.join(seen)}]]"
+
+
+def _truncate_refs(match: re.Match) -> str:
+    """单个标记内 > 3 条引用时，截断为 `[[ref:前两条]]等`（"等"在 ]] 之外）。"""
+    parts = [p.strip() for p in match.group(1).split(",") if p.strip()]
+    if len(parts) > 3:
+        return f"[[ref:{','.join(parts[:2])}]]等"
+    return f"[[ref:{','.join(parts)}]]"
+
+
+def sanitize_response(text: str) -> tuple[str, dict]:
+    """对生成结果做轻量后处理 + 违规计数。"""
+    stats = {"adjacent_refs_merged": 0, "over_length_refs_truncated": 0,
+             "etc_inside_ref_fixed": 0,
+             "self_check_tail_stripped": False}
+    if not text:
+        return text, stats
+
+    # 0. 模型把"等"塞进 ]] 内部 → 提到 ]] 之外
+    def _fix_etc_inside(m: re.Match) -> str:
+        nums = m.group(1).strip().rstrip(",，")
+        stats["etc_inside_ref_fixed"] += 1
+        return f"[[ref:{nums}]]等"
+    new_text = _REF_ETC_INSIDE_RE.sub(_fix_etc_inside, text)
+
+    # 1. 合并连续 [[ref:..]][[ref:..]]
+    merged_text, n = _REF_ADJ_RE.subn(_merge_refs, new_text)
+    while n:
+        stats["adjacent_refs_merged"] += n
+        merged_text, n = _REF_ADJ_RE.subn(_merge_refs, merged_text)
+    new_text = merged_text
+
+    # 2. 单标记 > 3 条 → 截断
+    def _count_and_truncate(m: re.Match) -> str:
+        out = _truncate_refs(m)
+        if out != m.group(0):
+            stats["over_length_refs_truncated"] += 1
+        return out
+
+    new_text = _REF_RE.sub(_count_and_truncate, new_text)
+
+    # 3. 自校验段误输出 → 截断
+    if _SELF_CHECK_TAIL_RE.search(new_text):
+        new_text = _SELF_CHECK_TAIL_RE.sub("", new_text).rstrip()
+        stats["self_check_tail_stripped"] = True
+
+    return new_text, stats
 
 
 class ResponseGenerator:
     """回复生成器：基于检索上下文生成最终回复"""
 
-    def __init__(self, api_key: str, model: str = "qwen-plus"):
+    def __init__(self, api_key: str, model: str = "qwen-plus",
+                 prompt_version: str = "v1"):
         self.api_key = api_key
         self.model = model
+        self.prompt_version = prompt_version
 
     def _build_prompt(self, user_query: str, rewritten_queries=None,
                       ranked_comments=None, summaries=None,
                       need_retrieval: bool = True, today: datetime | None = None,
                       history: dict | None = None) -> str:
-        """构建生成 prompt"""
-
-        # 构建上一轮对话上下文
-        history_context = ""
-        if history and history.get("user") and history.get("assistant"):
-            history_context = f"""
-【上一轮对话】
-用户：{history['user']}
-助手：{history['assistant']}
-"""
-
-        if not need_retrieval:
-            return f"""
-你是广州花园酒店的智能客服助手。
-
-{history_context}
-
-用户问题：{user_query}
-
-请直接回答用户的问题。注意：
-- 如果是问候或闲聊，友好回应
-- 如果是通用问题，给出简洁准确的回答
-- 如果用户的问题是对上一轮对话的追问，请结合上下文理解用户意图
-- 语气要亲切专业
-- 使用Markdown格式输出，不得出现 "```markdown", "```" 标记
-"""
-
-        if not today:
-            today = datetime.today()
-        date = f"{today.year}年{today.month}月{today.day}日"
-
-        # 构建改写 Query 上下文
-        queries_context = ""
-        if rewritten_queries:
-            queries_context += "【问题解析】\n系统识别到用户可能关注以下方面：\n"
-            queries_context += "\n".join(
-                [f"- {q['query']}（意图权重为{q['weight']}）" for q in rewritten_queries]
-            )
-            queries_context += "\n注意：权重信息是用来帮助你区分意图主次的，**不得**向用户输出权重相关信息。"
-
-        # 构建评论上下文
-        if ranked_comments:
-            comments_context = "【相关用户评论】\n"
-            for i, c in enumerate(ranked_comments, 1):
-                comments_context += f"""
-【评论{i}】
-评分: {c['metadata']['score']}（满分5分）
-发布日期: {c['metadata']['publish_date']}
-评论文本: {c['comment']}
-点赞数: {c['metadata']['useful_count']}
-评论数: {c['metadata']['review_count']}
-房型: {c['metadata']['room_type']}
-"""
-        else:
-            comments_context = "【未检索到相关用户评论】\n"
-
-        # 构建摘要上下文
-        summaries_context = ""
-        if summaries:
-            summaries_context += "【相关评论摘要】\n"
-            for s in summaries:
-                summaries_context += f"""
-【{s['metadata']['category']}类别摘要】
-关键词: {s['metadata']['keywords']}
-摘要: {s['summary']}
-"""
-            summaries_context += """
-注意：评论摘要是用来给到你更丰富的概览信息的，但用户只能看到【相关用户评论】的引用而看不到摘要的引用，因此在回复中你可以给出摘要中的模糊信息，\
-但**不得过于精确因为用户无法溯源**，也**不得告诉用户你引用了摘要**，**更不得将其当作评论引用输出"评论x"**。若摘要中的信息与用户问题无关，直接忽略即可，**不需要**做出任何额外说明。
-"""
-
-        return f"""
-你是广州花园酒店的智能客服助手，需要基于用户评论为用户提供准确、高质量、有帮助、简洁的回答。
-
-今天是：{date}
-
-{history_context}
-
-用户问题：{user_query}
-
-{queries_context}
-
-{comments_context}
-
-{summaries_context}
-
-【回答要求】
-1. 综合以上评论信息，给出客观、全面的回答
-2. 回答要有条理，突出重点
-3. 如有正面和负面评价，都要提及，保持客观。注意给出的参考评论并不代表所有，切忌以偏概全给出"绝对化"的表述
-4. 语气要专业、亲切
-5. 回答长度适中，不要过于冗长
-6. 不得大段或连续照抄用户评论，严禁全文都在引用用户评论却并没有思考提炼总结。相似内容能合并就合并，不要分开引用（合并后注意不得同时列出超过3条参考评论，使用"等"替代）
-7. 一般来说越靠前的评论，其重要性越高，但你也可以自行判断自行选择
-8. 不得在回复中罗列用户评论的具体日期，但当用户问题时效性敏感时，可以大致提一下参考评论的时间范围；当用户未表现出明显时效性需求时不要强行给出具体时间
-9. 引用【相关用户评论】中某一条评论独特内容时，应使用引用标记 [[ref:N]]（N为评论序号）标注来源（**仅标注非常确定的引用，模棱两可的引用不要标注，务必保证引用序号绝对正确**），供用户参考；但针对参考评论总体（如"多数住客……"等内容）或【xx类别摘要】进行归纳总结时**无需**标注。引用标记示例：某某服务很好[[ref:2]]。不要在标记外面加任何括号或其他包裹符号
-10. 不得同时列出超过3条引用，即最多 [[ref:1,3,5]]。如需同时引用超过3条评论，则应只保留排名最靠前的2条并加"等"字，输出形式为 [[ref:1,3]]等。注意多条引用写在同一个标记内用逗号分隔，如 [[ref:1,3]]，而不是 [[ref:1]][[ref:3]]
-11. 如果评论信息不足以回答问题，诚实说明
-12. 所有的回复必须仅依赖检索到的用户评论及摘要，不得出现自作主张的幻觉回复，例如帮用户查询酒店今日客房剩余、当前酒店相关活动推荐等一律不允许出现。你并没有接入酒店内部API无法完成这些事情因此禁止在回复中出现此类幻觉信息
-13. 使用Markdown格式输出，不得出现 "```markdown", "```" 标记
-
-用户问题：{user_query}
-
-请给出你的回答：
-"""
+        """构建生成 prompt（统一委托给 prompts.build_prompt）"""
+        return build_prompt(
+            version=self.prompt_version,
+            user_query=user_query,
+            rewritten_queries=rewritten_queries,
+            ranked_comments=ranked_comments,
+            summaries=summaries,
+            need_retrieval=need_retrieval,
+            today=today,
+            history=history,
+        )
 
     def _call_kwargs(self, prompt: str, temperature: float = 0.7) -> dict:
         """构建 Generation.call() 的通用参数"""
@@ -173,6 +154,11 @@ class ResponseGenerator:
         if ttft_model:
             subsequent_time = time.time() - first_token_time
 
+        # 引用违规兜底
+        response_content, sanitize_stats = sanitize_response(response_content)
+        if any(sanitize_stats.values()):
+            print(f"[prompt={PROMPT_VERSION}] 引用违规兜底: {sanitize_stats}")
+
         generation_time = time.time() - start_time
 
         return response_content, ttft_model, subsequent_time, generation_time
@@ -191,10 +177,29 @@ class ResponseGenerator:
 
         completion = Generation.call(**self._call_kwargs(prompt))
 
+        # 流式场景：本身在 chunk 间难以做"跨 chunk"的引用合并，
+        # 因此采用"小缓冲 + 行级 flush"策略，避免把 [[ref:..]][[ref:..]]
+        # 这种紧邻情况漏过。缓冲不超过 64 字符。
+        buffer = ""
+        BUFFER_FLUSH_LEN = 64
+
         for chunk in completion:
             if chunk.status_code != 200:
                 raise RuntimeError(f"回复生成失败: {chunk.message}")
 
             message = chunk.output.choices[0].message
             if message.content:
-                yield message.content
+                buffer += message.content
+                # 遇到换行或缓冲过长就 flush（保留尾部一点防截断引用标记）
+                while "\n" in buffer or len(buffer) >= BUFFER_FLUSH_LEN:
+                    if "\n" in buffer:
+                        head, buffer = buffer.split("\n", 1)
+                        head += "\n"
+                    else:
+                        head, buffer = buffer[:BUFFER_FLUSH_LEN - 16], buffer[BUFFER_FLUSH_LEN - 16:]
+                    cleaned, _ = sanitize_response(head)
+                    yield cleaned
+
+        if buffer:
+            cleaned, _ = sanitize_response(buffer)
+            yield cleaned

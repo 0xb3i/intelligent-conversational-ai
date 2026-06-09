@@ -9,6 +9,15 @@ export type StandardCategory =
 
 export type CategoryGroup = '设施类' | '服务类' | '位置类' | '价格类' | '体验类';
 
+// RAG 命中的"关键句"信息：用于在前端把命中片段在原评论中高亮
+export interface PrimaryChunk {
+  chunk_id: string;
+  text: string;
+  char_start: number;
+  char_end: number;
+  seq: number;
+}
+
 export interface Comment {
   _id: string;
   comment: string;
@@ -28,6 +37,8 @@ export interface Comment {
   category3: StandardCategory | null;
   // 聚合的类别数组（用于前端展示，从 category1/2/3 派生）
   categories: StandardCategory[];
+  // RAG 命中关键句（仅在 RAG 引用结果中存在；列表/详情场景为 undefined）
+  primary_chunk?: PrimaryChunk | null;
 }
 
 export interface CommentListResponse {
