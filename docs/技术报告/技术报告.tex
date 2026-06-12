@@ -1,0 +1,136 @@
+% =============================================================================
+% Hotel Review RAG 技术报告 — 个人贡献章节（优化项 2 与 16）
+% 篇幅约束：本人两项优化合计 ≤ 3 页（团队 8 项共用 10 页限额）
+% 版式：复用 tech-blog-style 的章节/标题/字号/留白，去除彩色 callout 框
+% 编译：xelatex 跑两遍
+% =============================================================================
+\documentclass[11pt]{ctexart}
+
+\usepackage[a4paper,top=2.0cm,bottom=2.2cm,left=2.4cm,right=2.4cm]{geometry}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage[table]{xcolor}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{parskip}
+\usepackage{titlesec}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=black!75,
+  urlcolor=black!75,
+  pdftitle={Hotel Review RAG 技术报告},
+  pdfsubject={Optimizations 2 \& 16}
+}
+
+\setlength{\parskip}{0.45em}
+\setlength{\parindent}{0pt}
+\setlist[itemize]{leftmargin=1.6em,topsep=0.15em,itemsep=0.1em}
+\captionsetup{font=small,labelfont=bf,skip=3pt}
+\linespread{1.30}
+\setlength{\headheight}{14pt}
+
+% --- 配色（仅用于章节锚标与分割线，无彩色块） ---
+\definecolor{InkBlack}{RGB}{33, 37, 41}
+\definecolor{Accent}{RGB}{47, 84, 150}
+\definecolor{Soft}{RGB}{240, 243, 247}
+\definecolor{MetaGray}{RGB}{120, 126, 138}
+\definecolor{Anchor}{RGB}{47, 84, 150}
+
+\setlength{\aboverulesep}{0pt}
+\setlength{\belowrulesep}{0pt}
+\setlength{\extrarowheight}{2.5pt}
+
+% --- 章节样式（与 skill 保持一致：左侧蓝色锚标 + 加粗黑体） ---
+\newcommand{\sectionanchor}{%
+  \raisebox{0.05em}{\textcolor{Anchor}{\rule{3pt}{0.95em}}}\hspace{0.55em}%
+}
+\titleformat{\section}
+{\normalsize}{}{0pt}
+{\sectionanchor\bfseries\fontsize{14pt}{18pt}\selectfont\color{InkBlack}}[\vspace{-0.15em}]
+\titleformat{\subsection}
+{\normalsize}{}{0pt}
+{\bfseries\fontsize{11.5pt}{14pt}\selectfont\color{InkBlack}}[\vspace{-0.15em}]
+\titlespacing*{\section}{0pt}{1.2em}{0.4em}
+\titlespacing*{\subsection}{0pt}{0.7em}{0.2em}
+
+\begin{document}
+
+% --- 标题区（与 skill 一致的居中标题，但去掉黄色标签 callout） ---
+\begin{center}
+\vspace*{-0.4em}
+{\fontsize{19pt}{24pt}\selectfont\bfseries\color{InkBlack} 技术报告\par}
+\vspace{0.6em}
+{\color{Accent}\rule{2.4cm}{1.2pt}}\par
+\end{center}
+\vspace{0.3em}
+
+\section{评论文本分块与引用高亮}
+
+\subsection{痛点}
+
+原系统从入库、建索引到检索、拼接，全程把「整条评论」当成最小检索单元。在评论平均长度只有几十字的场景下这种做法勉强能跑，但有三类问题反复出现。第一，一条评论里常常同时谈到「早餐很差、隔音不错、前台很好」等多个主题，把整条评论压成一个向量与一份倒排文档之后，单一主题就会被其它内容稀释，用户问「早餐怎么样」时，本该最相关的评论排名反而下降。第二，模型每次只能整段引用一条评论，前端也只能整条高亮，用户拿到的是一整段长文，还要自己再去文里找证据句，体验上离「精确定位被引用的内容」相去甚远。第三，长评论里的非主题部分容易把检索带偏，比如用户问网络，而某条评论几乎全在讲早餐、只在结尾提了一句 Wi-Fi，这种评论也会被错误地排到前面。
+
+\subsection{方案}
+
+整体思路是把「一条评论 = 一份文档」改成「一条评论包含若干句子级的 chunk」，让检索在更细的粒度上进行，同时让前端能直接知道哪一句被命中、把那一句标亮。具体的切分策略在「按句子切」「按固定长度滑窗切」「按主题相似度切」三种方案之间做了权衡。第三种效果上限最高但要先训练或调用一个主题分类器，工作量与依赖都比较重，最终选择的是「以句子切分为主，遇到特别长的句子再叠一层滑窗」，过短的句子与相邻句合并以避免噪声，整套切分逻辑大约 60 行，便于后续替换或对照实验。
+
+检索过程也相应做了调整。让 BM25 先在更细的句子级 chunk 上做召回，结果整理完之后再按「来自同一条评论」做归并，每条评论只保留得分最高的那一句作为「代表句」，并把这句话在原评论中对应的字符位置一起返回。这样得到的结果对外仍然是「一条条评论」的形式，老的接口和前端组件都不用动，但每条评论上多挂了一个「这条评论是因为这一句被命中」的元信息。前端拿到这条信息后，把原评论里对应的那一段文字直接套上 \texttt{<mark>} 高亮即可，整个过程不依赖模型自己输出位置，因而既稳定又零额外成本。如果分块索引由于某种原因不可用，系统也会自动回退到原来的整条评论检索，不会因为优化引入风险。
+
+\subsection{效果}
+
+切分之后整库由 2171 条评论展开为 7883 个句子级 chunk，每条评论平均 3.63 个 chunk，平均文档长度由 41 词左右降到 12 词左右，但整库的词表规模几乎没变，说明这次改造改变的是「文档怎么切」而非「引入新的内容」。多样性方面也有明显变化，在 100 个 Query 的离线对比中，Top-30 命中里覆盖了将近 29 条不同评论，且每条评论平均只被一个代表句命中，避免了同一条长评论靠多个 chunk 反复挤占榜单的情况。表~\ref{tab:chunk} 给出了这些指标的前后对比，可以看到分块在保持词表稳定的前提下，让召回的粒度与覆盖面同步向更细的层级靠拢。
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{分块与高亮的关键前后对比指标。}
+  \label{tab:chunk}
+  \renewcommand{\arraystretch}{1.2}
+  \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{6.0cm} >{\centering\arraybackslash}X >{\centering\arraybackslash}X}
+    \toprule
+    \rowcolor{Soft}
+    \textbf{指标} & \textbf{基线} & \textbf{优化后} \\
+    \midrule
+    索引文档数               & 2171   & \textbf{7883}（3.63 chunk/评论） \\
+    平均文档长度（词）        & 41.62  & \textbf{11.64} \\
+    Top-30 覆盖不同评论数    & ——     & \textbf{28.99}（命中 1.04 句/评论） \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+更直观的变化体现在前端界面上。图~\ref{fig:hl} 是优化后真实链路上的引用高亮效果，在「近期入住花园大床房的住客体验」这一问题下展开参考评论后，系统把真正与该问题相关的那一句以浅黄背景标出，其余文字保持正常底色，用户一眼就能确认「这条评论是因为这句话被引用过来的」，也省去了在长评论里手动定位证据的成本。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\textwidth]{screenshots/01_chunk_highlight.jpg}
+  \caption{展开第一条参考评论后，被命中的代表句以浅黄高亮，用户可以直接看出这条评论是因为哪句话被引用。}
+  \label{fig:hl}
+\end{figure}
+
+\section{Prompt 结构化优化}
+
+\subsection{痛点}
+
+原本的 Prompt 把所有信息都堆在一段长文本里，包括系统角色、历史对话、当前问题、检索回来的评论与摘要、以及十几条要求和引用规则。这样写出来的 Prompt 看着信息齐全，但模型并不容易抓住重点，几类问题会反复出现。一是回答经常先来一大段铺垫式的总结，再罗列优点缺点，对用户真正问的那个点反而轻描淡写。二是引用记号经常不合规，比如把四五条引用塞在同一个记号里、或者把同一个引用拆成两个挨在一起的小记号，前端解析与高亮就容易出问题。三是同一类问题在不同次回答里段落结构反复变动，前端很难做稳定的样式与跳转。这些问题的根源在于约束被平铺在一起，模型缺少一个明确可依的回答骨架。
+
+\subsection{方案}
+
+整体思路是借鉴常见的结构化 Prompt 写法，把原来的一团信息拆成五个清晰分工的小段：第一段交代「你是谁、能做什么、不能做什么」，约束模型只能基于检索回来的评论与摘要回答；第二段提供「上下文」，包括今天的日期、当前问题、检索回来的评论与摘要，并按需注入历史对话，仅在用户出现「那、还有、它、是吗」这类追问性质的表达时，才把上一轮带进来，避免无关历史污染当前回答；第三段告诉模型「你这次要做什么、回答应该长成什么样」，给出一个固定的输出骨架；第四段把反幻觉、客观性、简洁性、闲聊边界、Markdown 等约束精炼成五条编号要求，让模型逐条对照；第五段是「自我校验」，要求模型在内心回看一遍引用是否合规、再把不合规的写法自己改正过来，但不把这个过程写进最终回答。这样改下来的好处是结构清楚、责任分明，模型每段都知道该做什么，输出也更接近一个稳定的模板，而不是每次自由发挥。
+
+\subsection{效果}
+
+经过五段式重构之后，模型在面对「近期入住花园大床房的住客体验如何」这类典型问题时，能稳定输出「先一句结论 + 几个带引用的要点 + 一句风险提示」的三层结构，引用全部以合规的蓝色徽标渲染，几乎没再出现把多条引用拆开或塞在一起的情况。图~\ref{fig:answer} 是真实链路上的一次回答展示，开头一句先总括「房间舒适度普遍获得高度评价、卫生状况则呈现明显分化」，随后用三条带引用的要点分别覆盖房间布局与设施、文化氛围与空间体验、以及卫生方面的隐含风险，最后以一句关于敏感人群体验的风险提示收束，每条要点的引用都直接挂回到下方的评论卡片，用户可以点开继续验证证据。整体阅读体验比改造前的「长篇铺陈」明显更聚焦，前端也能依赖这个稳定结构做二级渲染与样式收敛。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\textwidth]{screenshots/02_prompt_answer.jpg}
+  \caption{重构后 Prompt 在真实链路上的回答示例，三层结构稳定且引用合规。}
+  \label{fig:answer}
+\end{figure}
+
+\end{document}
