@@ -54,6 +54,24 @@ class HotelReviewRAG:
         chroma_client = chromadb.PersistentClient(path=str(chroma_db_path))
         self.summaries_collection = chroma_client.get_collection("summary_database")
 
+        # 可选：加载 v2 摘要集合（overview 粗筛 + points 精排）
+        # 启动失败/缺集合时自动回退到 v1，保持向后兼容
+        self.summary_overview_collection = None
+        self.summary_points_collection = None
+        self.summary_mode = "v1"
+        try:
+            existing = {c.name for c in chroma_client.list_collections()}
+            if "summary_overview_v2" in existing and "summary_points_v2" in existing:
+                self.summary_overview_collection = chroma_client.get_collection("summary_overview_v2")
+                self.summary_points_collection = chroma_client.get_collection("summary_points_v2")
+                self.summary_mode = "v2"
+                print(f"已加载 v2 摘要集合: overview={self.summary_overview_collection.count()} 条, "
+                      f"points={self.summary_points_collection.count()} 条")
+            else:
+                print("未发现 v2 摘要集合，使用 v1 单集合模式（如需启用请运行 scripts/index_summaries.py）")
+        except Exception as e:
+            print(f"加载 v2 摘要集合失败，回退到 v1：{e}")
+
         # 加载倒排索引
         self.inverted_index = InvertedIndex()
         self.inverted_index.load(str(data_dir / "inverted_index.pkl"))
@@ -98,7 +116,10 @@ class HotelReviewRAG:
             self.inverted_index, self.comments_collection,
             self.reverse_queries_collection, self.summaries_collection,
             embedding_client, self.df_comments, self.hyde_generator,
-            chunked_index=self.chunked_index, chunk_meta=self.chunk_meta
+            chunked_index=self.chunked_index, chunk_meta=self.chunk_meta,
+            summary_overview_collection=self.summary_overview_collection,
+            summary_points_collection=self.summary_points_collection,
+            summary_mode=self.summary_mode,
         )
         self.reranker = Reranker(key)
         self.generator = ResponseGenerator(key, model=generation_model)
@@ -230,7 +251,8 @@ class HotelReviewRAG:
             enable_hyde=enable_hyde,
             enable_summary=enable_summary,
             dashvector_filter=intent_detection_result.get('dashvector_filter'),
-            bm25_filter_keywords=intent_detection_result.get('bm25_filter_keywords', [])
+            bm25_filter_keywords=intent_detection_result.get('bm25_filter_keywords', []),
+            expected_polarity=intent_detection_result.get('expected_polarity'),
         )
         timing['retrieval'] = retrieval_timing
 
@@ -421,7 +443,8 @@ class HotelReviewRAG:
             enable_hyde=enable_hyde,
             enable_summary=enable_summary,
             dashvector_filter=intent_detection_result.get('dashvector_filter'),
-            bm25_filter_keywords=intent_detection_result.get('bm25_filter_keywords', [])
+            bm25_filter_keywords=intent_detection_result.get('bm25_filter_keywords', []),
+            expected_polarity=intent_detection_result.get('expected_polarity'),
         )
         timing['retrieval'] = retrieval_timing
 
