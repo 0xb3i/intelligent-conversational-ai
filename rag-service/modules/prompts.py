@@ -205,18 +205,56 @@ def _v1_retrieval(user_query, rewritten_queries, ranked_comments, summaries,
     else:
         comments_block = "（未检索到相关用户评论）"
 
-    # 摘要块：把警示提到前面
+    # 摘要块：把警示提到前面；同时支持 v1（整段）与 v2（要点级）两种结构
     summaries_block = ""
     if summaries:
-        summaries_block = (
-            "【背景摘要：仅供你判断使用，**不得**作为引用源、不得在回答中提及"
-            '"摘要"二字、**不得**用作 [[ref:..]] 的来源】\n'
+        # 判断是否为 v2 摘要：任一项带 schema_version='v2' 或 points 字段
+        is_v2 = any(
+            (s.get("schema_version") == "v2") or s.get("points") for s in summaries
         )
-        for s in summaries:
-            md = s.get("metadata", {})
-            summaries_block += (
-                f"- {md.get('category','?')}（关键词：{md.get('keywords','')}）：{s.get('summary','')}\n"
+
+        if is_v2:
+            summaries_block = (
+                "【关键要点（系统从评论库归纳，按类目→子主题分组）：用作答案骨架，"
+                '可整合表述但不要逐字抄；要点本身**不出现在引用编号**中，'
+                "回答中**不得**提及\"摘要 / 要点 / 系统归纳\"等元词】\n"
             )
+            polarity_zh = {
+                "positive": "正面", "negative": "负面", "neutral": "中性",
+            }
+            for s in summaries:
+                md = s.get("metadata", {})
+                cat = md.get("category", "?")
+                pts = s.get("points", []) or []
+                if pts:
+                    summaries_block += f"\n· {cat}：\n"
+                    for p in pts:
+                        sub = p.get("subtopic", "")
+                        pol = polarity_zh.get(p.get("polarity", ""), p.get("polarity", ""))
+                        sal = p.get("salience", 0)
+                        kws = "、".join(p.get("keywords", []) or [])
+                        summary_txt = (p.get("summary") or "").strip()
+                        if len(summary_txt) > 160:
+                            summary_txt = summary_txt[:160] + "…"
+                        kws_part = f"｜关键词：{kws}" if kws else ""
+                        summaries_block += (
+                            f"  - [{pol}|显著度{sal:.2f}] {sub}: {summary_txt}{kws_part}\n"
+                        )
+                else:
+                    # 兜底：v2 类目没拿到 points 时把 overview 当背景
+                    overview = (s.get("summary") or "").strip()
+                    if overview:
+                        summaries_block += f"\n· {cat}（总览）：{overview}\n"
+        else:
+            summaries_block = (
+                "【背景摘要：仅供你判断使用，**不得**作为引用源、不得在回答中提及"
+                '"摘要"二字、**不得**用作 [[ref:..]] 的来源】\n'
+            )
+            for s in summaries:
+                md = s.get("metadata", {})
+                summaries_block += (
+                    f"- {md.get('category','?')}（关键词：{md.get('keywords','')}）：{s.get('summary','')}\n"
+                )
 
     return f"""# 角色
 你是广州花园酒店的智能客服助手。所有回答必须**仅基于**下面提供的住客评论与背景摘要。

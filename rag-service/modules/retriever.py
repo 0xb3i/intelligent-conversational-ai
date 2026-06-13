@@ -10,13 +10,19 @@ class HybridRetriever:
 
     def __init__(self, inverted_index, comments_collection, reverse_queries_collection,
                  summaries_collection, embedding_client, df_comments, hyde_generator,
-                 chunked_index=None, chunk_meta=None):
+                 chunked_index=None, chunk_meta=None,
+                 summary_overview_collection=None, summary_points_collection=None,
+                 summary_mode: str = "v1"):
         """
         参数:
             chunked_index: 可选，chunk 级 BM25 倒排索引（InvertedIndex）。提供后
                 BM25 路改为在 chunk 上检索，再按 comment_id 折叠回评论级别。
             chunk_meta: 可选，{chunk_id: {comment_id, seq, char_start, char_end, text}}
                 用于把命中 chunk 折叠回 comment 并透出 primary_chunk 的字符跨度。
+            summary_overview_collection: 可选，v2 类目级 chroma 集合（粗筛用）
+            summary_points_collection:   可选，v2 要点级 chroma 集合（精排用）
+            summary_mode: "v1" -> 旧 14 条整段摘要；"v2" -> 类目+要点两阶段
+                若 mode=v2 但没传 v2 集合，会自动回退到 v1（兼容启动失败）
         """
         self.inverted_index = inverted_index
         self.comments_collection = comments_collection
@@ -27,6 +33,16 @@ class HybridRetriever:
         self.df_comments = df_comments
         self.chunked_index = chunked_index
         self.chunk_meta = chunk_meta or {}
+        # ── 摘要 v2 ────────────────────────────────────────
+        self.summary_overview_collection = summary_overview_collection
+        self.summary_points_collection = summary_points_collection
+        if summary_mode == "v2" and (
+            summary_overview_collection is None or summary_points_collection is None
+        ):
+            print("[retriever] 摘要 v2 集合未提供，回退到 v1 单集合模式")
+            self.summary_mode = "v1"
+        else:
+            self.summary_mode = summary_mode
         # comment_id → 该评论的 chunk_id 列表（按 seq 升序）
         self._comment_to_chunks: dict[str, list[str]] = {}
         if self.chunk_meta:
@@ -40,7 +56,8 @@ class HybridRetriever:
     def retrieve(self, rewritten_queries, room_type=None, fuzzy_room_type=None, topk=150,
                  final_topk=100, enable_bm25=True, enable_vector=True,
                  enable_reverse=True, enable_hyde=True, enable_summary=True,
-                 dashvector_filter=None, bm25_filter_keywords=None):
+                 dashvector_filter=None, bm25_filter_keywords=None,
+                 expected_polarity=None):
         """
         混合检索
 
@@ -52,6 +69,8 @@ class HybridRetriever:
             final_topk: 最终返回的评论数量
             dashvector_filter: DashVector 兼容过滤表达式（优化项 10）
             bm25_filter_keywords: BM25 关键词约束列表（优化项 10）
+            expected_polarity: 期望极性（["positive"] / ["negative"] / None）
+                用于摘要 v2 的两阶段检索做极性过滤（优化项 6）
         """
         timing = {}
         retrieve_start_time = time.time()
@@ -90,7 +109,9 @@ class HybridRetriever:
             if enable_hyde:
                 futures[executor.submit(self._route_hyde, queries, topk, room_filter)] = 'hyde'
             if enable_summary:
-                futures[executor.submit(self._route_summary, query_embeddings)] = 'summary'
+                futures[executor.submit(
+                    self._route_summary, query_embeddings, expected_polarity
+                )] = 'summary'
 
             comment_results = []
             summary_results = []
@@ -366,10 +387,25 @@ class HybridRetriever:
 
     # ── 摘要路 ────────────────────────────────────────────────
 
-    def _route_summary(self, query_embeddings):
-        """第五路：类别摘要召回"""
+    def _route_summary(self, query_embeddings, expected_polarity=None):
+        """
+        第五路：摘要召回。
+        - summary_mode='v1'：旧 14 条整段摘要，每个 query 取 top1 类目（向后兼容）
+        - summary_mode='v2'：先在 overview 集合做类目粗筛，再在 points 集合做要点精排，
+          支持 polarity 过滤与 salience 加权。
+        返回的 summary 字典统一带 schema_version 字段，下游可据此选择渲染方式。
+        """
         start = time.time()
 
+        if self.summary_mode == "v2":
+            summaries = self._route_summary_v2(query_embeddings, expected_polarity)
+        else:
+            summaries = self._route_summary_v1(query_embeddings)
+
+        return summaries, time.time() - start
+
+    # ---- v1：旧 14 条整段摘要 ----
+    def _route_summary_v1(self, query_embeddings):
         summary_results = self.summaries_collection.query(
             query_embeddings=query_embeddings, n_results=1
         )
@@ -384,14 +420,161 @@ class HybridRetriever:
                 category_id = category_ids[0]
                 if category_id not in category_map:
                     category_map[category_id] = {
+                        'schema_version': 'v1',
                         'summary': documents[0],
                         'metadata': metadatas[0] if metadatas else {},
                         'retrieved_by_queries': []
                     }
                 category_map[category_id]['retrieved_by_queries'].append(query_idx)
 
-        summaries = list(category_map.values())
-        return summaries, time.time() - start
+        return list(category_map.values())
+
+    # ---- v2：类目粗筛 + 要点精排 ----
+    def _route_summary_v2(self, query_embeddings, expected_polarity=None,
+                          n_categories: int = 2, n_points_per_query: int = 8,
+                          final_topn: int = 6, salience_alpha: float = 0.3):
+        """
+        两阶段摘要检索：
+          ① overview 集合，每个 query 取 n_categories 个候选类目
+          ② points 集合，在候选类目内（按 polarity 过滤）取 n_points_per_query 条
+          ③ 融合排序：fused = (1 - distance) * (1 + alpha * salience)，
+             同 (category, subtopic) 取最高分，去重后返回 top-final_topn。
+        """
+        # ---- ① overview 粗筛 ----
+        ov = self.summary_overview_collection.query(
+            query_embeddings=query_embeddings, n_results=n_categories
+        )
+        candidate_categories = set()
+        category_query_map: dict[str, list[int]] = {}
+        for query_idx, metadatas in enumerate(ov['metadatas']):
+            for m in metadatas or []:
+                cat = m.get('category')
+                if not cat:
+                    continue
+                candidate_categories.add(cat)
+                category_query_map.setdefault(cat, []).append(query_idx)
+        if not candidate_categories:
+            return []
+
+        # ---- ② points 精排 ----
+        where_clauses: list[dict] = [
+            {"category": {"$in": list(candidate_categories)}}
+        ]
+        if expected_polarity:
+            # 兼容传入 str 或 list
+            if isinstance(expected_polarity, str):
+                expected_polarity = [expected_polarity]
+            where_clauses.append({"polarity": {"$in": list(expected_polarity)}})
+        where = where_clauses[0] if len(where_clauses) == 1 else {"$and": where_clauses}
+
+        try:
+            pts = self.summary_points_collection.query(
+                query_embeddings=query_embeddings,
+                n_results=n_points_per_query,
+                where=where,
+            )
+        except Exception:
+            # 极性过滤命中为空时部分 chroma 版本会抛错；此时放开极性再查一次
+            if expected_polarity:
+                pts = self.summary_points_collection.query(
+                    query_embeddings=query_embeddings,
+                    n_results=n_points_per_query,
+                    where={"category": {"$in": list(candidate_categories)}},
+                )
+            else:
+                raise
+
+        # ---- ③ 融合排序 + 去重 ----
+        # key = (category, subtopic)
+        best: dict[tuple, dict] = {}
+        for query_idx in range(len(pts['ids'])):
+            ids = pts['ids'][query_idx] or []
+            docs = pts['documents'][query_idx] or []
+            metas = pts['metadatas'][query_idx] or []
+            dists = pts['distances'][query_idx] or []
+            for i in range(len(ids)):
+                m = metas[i] or {}
+                cat = m.get('category', '')
+                sub = m.get('subtopic', '')
+                sal = float(m.get('salience', 0.0))
+                vec_score = 1.0 - float(dists[i])
+                fused = vec_score * (1.0 + salience_alpha * sal)
+                key = (cat, sub)
+                if (key not in best) or (fused > best[key]['fused_score']):
+                    keywords = m.get('keywords', '') or ''
+                    if isinstance(keywords, str):
+                        keywords_list = [
+                            k for k in keywords.split('|') if k
+                        ]
+                    else:
+                        keywords_list = list(keywords)
+                    best[key] = {
+                        'category': cat,
+                        'subtopic': sub,
+                        'polarity': m.get('polarity', 'neutral'),
+                        'summary': m.get('summary', '') or docs[i],
+                        'keywords': keywords_list,
+                        'salience': sal,
+                        'fused_score': fused,
+                        'vec_score': vec_score,
+                        'retrieved_by_queries': [query_idx],
+                    }
+                else:
+                    best[key]['retrieved_by_queries'].append(query_idx)
+
+        ranked_points = sorted(best.values(), key=lambda x: x['fused_score'], reverse=True)
+        ranked_points = ranked_points[:final_topn]
+
+        # ---- 按类目归并成下游期望的 list[dict] 形态 ----
+        # 同一类目的多个 points 合并到一项，保留 metadata.category + points 列表，
+        # 并在 metadata 里保留 v1 兼容字段（keywords/category），方便老 prompt 也能读
+        category_bucket: dict[str, dict] = {}
+        for p in ranked_points:
+            cat = p['category']
+            if cat not in category_bucket:
+                category_bucket[cat] = {
+                    'schema_version': 'v2',
+                    'summary': '',  # 类目级 overview 由下方填充
+                    'metadata': {
+                        'category': cat,
+                        'keywords': '',
+                    },
+                    'points': [],
+                    'retrieved_by_queries': [],
+                }
+            category_bucket[cat]['points'].append({
+                'subtopic': p['subtopic'],
+                'polarity': p['polarity'],
+                'summary': p['summary'],
+                'keywords': p['keywords'],
+                'salience': p['salience'],
+                'fused_score': p['fused_score'],
+            })
+            category_bucket[cat]['retrieved_by_queries'].extend(p['retrieved_by_queries'])
+
+        # ---- 给每个类目补上 overview 文本 + 全类 keywords（从 ov 结果里取）----
+        ov_lookup: dict[str, dict] = {}
+        for metadatas in ov['metadatas']:
+            for m in metadatas or []:
+                cat = m.get('category')
+                if cat and cat not in ov_lookup:
+                    ov_lookup[cat] = m
+        for cat, item in category_bucket.items():
+            ov_meta = ov_lookup.get(cat, {})
+            item['summary'] = ov_meta.get('overview', '') or ''
+            item['metadata']['keywords'] = ov_meta.get('keywords', '') or ''
+            item['metadata']['comment_count'] = ov_meta.get('comment_count', 0)
+            item['metadata']['n_points'] = ov_meta.get('n_points', 0)
+            # 去重 retrieved_by_queries
+            item['retrieved_by_queries'] = sorted(set(item['retrieved_by_queries']))
+
+        # 类目排序：取该类目下 points 的最高融合分
+        result = sorted(
+            category_bucket.values(),
+            key=lambda x: max((p['fused_score'] for p in x['points']), default=0),
+            reverse=True,
+        )
+        return result
 
     # ── RRF 融合 ─────────────────────────────────────────────
 

@@ -27,6 +27,13 @@ COMMENTS_CSV = ROOT / "RAG" / "data" / "processed" / "filtered_comments.csv"
 OUT_INDEX = ROOT / "rag-service" / "data" / "inverted_index_chunked.pkl"
 OUT_META = ROOT / "rag-service" / "data" / "chunk_meta.pkl"
 
+# BM25 v2：领域词典 + 同义词（同义词只影响 search，不影响 build 索引词项）
+HOTEL_DICT = ROOT / "rag-service" / "data" / "dict" / "hotel_dict.txt"
+SYNONYMS = ROOT / "rag-service" / "data" / "dict" / "synonyms.yaml"
+BM25_K1 = 1.5
+BM25_B = 0.75
+KEEP_DIGITS = True
+
 
 def main():
     df = pd.read_csv(COMMENTS_CSV)
@@ -52,7 +59,14 @@ def main():
     }
 
     t0 = time.time()
-    idx = InvertedIndex(stopwords_file=str(STOPWORDS))
+    idx = InvertedIndex(
+        k1=BM25_K1,
+        b=BM25_B,
+        stopwords_file=str(STOPWORDS),
+        hotel_dict_file=str(HOTEL_DICT) if HOTEL_DICT.exists() else None,
+        synonyms_file=str(SYNONYMS) if SYNONYMS.exists() else None,
+        keep_digits=KEEP_DIGITS,
+    )
     idx.build(docs)
     print(f"[index] built in {time.time()-t0:.2f}s; "
           f"{len(idx.index)} terms, {idx.num_docs} docs, "

@@ -213,4 +213,52 @@ DashVector 过滤表达式由 LLM 直接生成，例如「travel\_type = '商务
 
 以「商务出差且评分高的住客对早餐评价如何」为例，优化前系统返回的 Top-10 评论中仅有 5 条真正涉及商务出行和餐饮，其余 5 条混杂了家庭出游的低分评论和与餐饮无关的设施评价。优化后，ConstraintDetector 正确提取了 travel\_type=商务出差、score\_range=[4,5]、categories=[餐饮设施] 三个约束，DashVector 向量路通过过滤表达式精准命中目标评论，BM25 路通过「商务」「出差」「早餐」「好评」等关键词加权将餐饮相关评论的排名大幅提前，最终 Top-10 中 9 条评论同时满足商务出行、高评分和餐饮话题三个条件。
 
+\section{类目摘要 v2 与两阶段摘要检索}
+
+\subsection{痛点}
+
+原系统的类目摘要走「一类一段长综述」的写法，把每个类目下的全部评论一次性交给 LLM 写成 600 字左右的段落。在前端展示尚可，放进检索链路就出现两类问题：一是正负观点搅在同一段叙述里，用户问「有什么亮点」时\,「早餐很赞」与「早餐种类一般」会一起被召回，模型容易把正反观点折中输出；二是整段摘要做不出「显著度」概念，高频问题与偶发抱怨权重相同，无法在召回时被重点突出。
+
+\subsection{方案}
+
+把摘要重构为「类目级 overview + 子主题级 points」的结构化形式，并用 Map--Reduce 两阶段流水线生成。Map 阶段每次只让 LLM 处理 30 条评论，要求其抽出形如「子主题 / 极性 / 简短陈述 / 关键词 / 提及次数」的要点；Reduce 阶段把同类目下所有 Map 的候选要点拼起来再做一次全局调用，去重合并、按显著度排序，并配一句 2--4 句的总览。最终每个类目落库为 1 条 overview 与至多 6 条 points，分别建为两个独立的向量集合。检索端配套实现两阶段召回：先在 overview 集合定位类目，再在该类目的 points 集合内精排，并依据意图检测新增的 \texttt{expected\_polarity} 字段做极性过滤——用户问「亮点」只取正面要点、问「投诉」只取负面要点、中立则双极都取，命中要点按 salience 加权后送入回答 Prompt 作为答案骨架。
+
+\subsection{效果}
+
+新链路在「亮点 / 投诉」类有明显方向性的查询上变化最直接。例如用户问「最近住客有没有什么投诉」，旧链路会取出整段含正负面的摘要，模型给出折中表述；新链路下意图检测识别 \texttt{expected\_polarity=["negative"]}，两阶段召回只在「卫生 / 安静 / 餐饮」等类目下取负面要点并按显著度排序，回答开头能直接给出「集中反映在 X、Y、Z 三方面」的负面结论。生成成本上，每个类目从一次大上下文调用变为约 7--8 次 30 条上下文的 Map 调用 + 1 次 Reduce，单次输入长度下降一个数量级，JSON 输出稳定性显著上升，且每条要点都附 \texttt{subtopic / polarity / salience / keywords} 字段，为后续做检索加权与前端可视化均留出了空间。
+
+\section{BM25 倒排索引优化（领域词典 + 同义词扩展）}
+
+\subsection{痛点}
+
+升级到句子级 chunk 后，BM25 召回质量未跟上，问题集中在分词与词项匹配两层。分词层面，jieba 默认词典对酒店复合词缺乏认知：「早餐厅」被切成「早餐+厅」、「自助晚餐」无法整词识别，导致这些关键词在索引里被拆散；同时原清洗正则把数字直接过滤掉，「500元」「2 人间」等表达全部丢失。匹配层面，BM25 是字面算法，问「早餐」命中不了「早膳 / 早点 / 早饭」，问「Wi-Fi」也命中不了「无线网络」，使得 BM25 路在短 query 上与向量路严重重叠，没起到字面互补的作用。
+
+\subsection{方案}
+
+在不改 BM25 公式与索引文件协议的前提下，从分词与查询扩展两侧注入领域知识，并把可调参数集中到 \texttt{config.py}。具体三件事：第一，构造领域词典覆盖房型 / 设施 / 餐饮 / 服务 / 位置 / 价格六维复合词，由 \texttt{InvertedIndex} 在初始化时通过 \texttt{jieba.load\_userdict} 注册，并放宽清洗正则、新增 \texttt{KEEP\_DIGITS} 开关让数字保留进入索引；第二，构造同义词组 \texttt{synonyms.yaml}（14 个意图维度，171 token），在线 search 时若开关打开，就在 query 分词后做 OR 扩展（如 token「早餐」扩展为 \{早餐, 早膳, 早点, 早饭, brunch\} 共同打分），扩展只发生在查询侧、不污染索引词项，可热改、不需要重建；第三，把 BM25 的 k1 / b、词典路径、同义词路径、数字与扩展开关全部放进 \texttt{config.py}，让离线 build 与在线 search 走同一份配置。
+
+\subsection{效果}
+
+在 \texttt{eval\_set.json} 中带 \texttt{intent\_direction} 标签的 70 条 query 上做了三档对比，指标采用 soft\_recall@10（按 intent 反查类目关键词集合软命中）、term\_hit@10、distinct@10 与延迟。结果见表~\ref{tab:bm25}。
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{BM25 三档对比：baseline / +dict / +dict+syn（70 条带 intent\_direction 的 query）。}
+  \label{tab:bm25}
+  \renewcommand{\arraystretch}{1.15}
+  \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3.6cm} >{\centering\arraybackslash}X >{\centering\arraybackslash}X >{\centering\arraybackslash}X >{\centering\arraybackslash}X}
+    \toprule
+    \rowcolor{Soft}
+    \textbf{方案} & \textbf{soft\_recall@10} & \textbf{term\_hit@10} & \textbf{avg ms} & \textbf{p95 ms} \\
+    \midrule
+    baseline       & 0.196          & 0.732 & 0.64 & 1.58 \\
+    +dict          & 0.189          & 0.724 & 0.63 & 1.42 \\
+    +dict+syn      & \textbf{0.237} & 0.707 & 0.75 & 1.68 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+仅加领域词典反而轻微下降（$-0.7\%$），原因是词典把「早餐厅」绑成整词后，原本能被「早餐」「厅」分别命中的两条评论被收紧到只有「早餐厅」整词命中，词典的价值要等同义词扩展接上之后才能完整释放；叠加同义词扩展后 soft\_recall@10 提升至 0.237，相对 baseline $+21\%$，延迟仅 +0.1\,ms。重建索引后端到端验证显示，TopK 中「文本路 + 向量路」双路命中比例明显上升，BM25 路在短 query 上回到了与向量路互补的位置。
+
 \end{document}

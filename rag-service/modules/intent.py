@@ -70,7 +70,8 @@ class IntentDetector:
             {
                 "room_type": "花园大床房" | ... | None,
                 "fuzzy_room_type": "大床房" | ... | None,
-                "time_sensitivity": "clear" | "implied" | None
+                "time_sensitivity": "clear" | "implied" | None,
+                "expected_polarity": ["positive"] | ["negative"] | ["positive","negative"] | None
             }
         """
         prompt = f"""
@@ -80,6 +81,7 @@ class IntentDetector:
 从用户查询中提取以下信息：
 1. 房型约束：用户是否提到特定房型
 2. 时效性需求：用户是否关注最新信息
+3. 极性倾向：用户问题是想了解正面、负面还是中立信息
 
 【精确房型列表】
 {json.dumps(self.exact_room_types, ensure_ascii=False)}
@@ -97,6 +99,17 @@ class IntentDetector:
 - implied: 用户隐含关注当前现状，但未明确表达，表现弱时效性
 - None: 用户未表现出时效性关注
 
+【极性判断标准】
+- ["positive"]      : 用户在问亮点 / 优势 / 推荐 / 值得 / 好不好（偏期待正面）
+                      例："有什么亮点？""值得住吗？""推荐什么餐厅？"
+- ["negative"]      : 用户在问投诉 / 问题 / 缺点 / 槽点 / 吵不吵 / 贵不贵 / 差不差
+                      例："有什么投诉？""房间噪音大吗？""早餐贵吗？"
+- ["positive", "negative"] : 用户中立询问，希望同时看到正反两面（默认情况）
+                              例："服务怎么样？""餐饮如何？""体验好吗？"
+- None              : 无法判断或问题与酒店评价无关
+
+判断时只看用户问题字面与语气，不要尝试给出回答内容。
+
 【用户查询】
 {query}
 
@@ -105,7 +118,8 @@ class IntentDetector:
 {{
     "room_type": "花园大床房" 或 None,
     "fuzzy_room_type": "大床房" 或 None,
-    "time_sensitivity": "clear" 或 "implied" 或 None
+    "time_sensitivity": "clear" 或 "implied" 或 None,
+    "expected_polarity": ["positive"] 或 ["negative"] 或 ["positive","negative"] 或 None
 }}
 """
 
@@ -114,12 +128,27 @@ class IntentDetector:
                 response = self.llm_client.generate(prompt, temperature=0.1)
                 response = response.replace('```json', '').replace('```', '').strip()
                 data = json.loads(response)
-                if data['room_type'] and data['room_type'] not in self.exact_room_types:
+                if data.get('room_type') and data['room_type'] not in self.exact_room_types:
                     data['room_type'] = None
-                if data['fuzzy_room_type'] and data['fuzzy_room_type'] not in self.fuzzy_room_types:
+                if data.get('fuzzy_room_type') and data['fuzzy_room_type'] not in self.fuzzy_room_types:
                     data['fuzzy_room_type'] = None
-                if data['time_sensitivity'] and data['time_sensitivity'] not in ['clear', 'implied']:
+                if data.get('time_sensitivity') and data['time_sensitivity'] not in ['clear', 'implied']:
                     data['time_sensitivity'] = None
+                # 极性字段后处理
+                pol = data.get('expected_polarity')
+                if pol is not None:
+                    if isinstance(pol, str):
+                        pol = [pol]
+                    if isinstance(pol, list):
+                        pol = [p for p in pol if p in ('positive', 'negative', 'neutral')]
+                        # 都包含 = 不做过滤；过滤的关键意义在于"只取一面"
+                        if not pol or set(pol) >= {'positive', 'negative'}:
+                            pol = None
+                    else:
+                        pol = None
+                else:
+                    pol = None
+                data['expected_polarity'] = pol
                 return data
             except Exception as e:
                 print(f"意图检测第 {i+1} 次尝试失败: {e}")
@@ -131,7 +160,8 @@ class IntentDetector:
         return {
             "room_type": None,
             "fuzzy_room_type": None,
-            "time_sensitivity": None
+            "time_sensitivity": None,
+            "expected_polarity": None,
         }
 
 
