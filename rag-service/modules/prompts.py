@@ -318,11 +318,144 @@ def _v1_chitchat(user_query, history) -> str:
 """
 
 
+# ── v2：多轮对话增强 ────────────────────────────────────────────────
+
+def _v2_retrieval(user_query, rewritten_queries, ranked_comments, summaries,
+                  today, history, conversation_context: str = "") -> str:
+    """v2 检索 prompt：集成多轮对话上下文分层注入"""
+    today = today or datetime.today()
+    date_str = f"{today.year}年{today.month}月{today.day}日"
+
+    # 意图块
+    queries_block = "无"
+    if rewritten_queries:
+        queries_block = "；".join(
+            [f"{q['query']}(w={q['weight']})" for q in rewritten_queries]
+        )
+
+    # 对话历史块（由 ConversationManager 预组装）
+    conversation_block = ""
+    if conversation_context:
+        conversation_block = f"# 对话历史\n{conversation_context}\n"
+
+    # 评论块
+    if ranked_comments:
+        lines = []
+        for i, c in enumerate(ranked_comments, 1):
+            md = c.get("metadata", {})
+            tag = coarsen_date(md.get("publish_date", ""), today.date()
+                               if isinstance(today, datetime) else today)
+            txt = (c.get("comment") or "").strip().replace("\n", " ")
+            if len(txt) > 220:
+                txt = txt[:220] + "…"
+            primary = c.get("primary_chunk")
+            head = (
+                f"[评论{i}] 评分{md.get('score','?')}｜{tag}｜{md.get('room_type','-')}"
+            )
+            if primary and primary.get("text"):
+                key_sent = primary["text"].strip().replace("\n", " ")
+                if len(key_sent) > 80:
+                    key_sent = key_sent[:80] + "…"
+                if len(txt) > 80:
+                    lines.append(f"{head}\n  关键句：{key_sent}\n  全文：{txt}")
+                else:
+                    lines.append(f"{head}\n  关键句：{key_sent}")
+            else:
+                lines.append(f"{head}\n  内容：{txt}")
+        comments_block = "\n".join(lines)
+    else:
+        comments_block = "（未检索到相关用户评论）"
+
+    # 摘要块
+    summaries_block = ""
+    if summaries:
+        summaries_block = (
+            "【背景摘要：仅供你判断使用，**不得**作为引用源、不得在回答中提及"
+            '"摘要"二字、**不得**用作 [[ref:..]] 的来源】\n'
+        )
+        for s in summaries:
+            md = s.get("metadata", {})
+            summaries_block += (
+                f"- {md.get('category','?')}（关键词：{md.get('keywords','')}）：{s.get('summary','')}\n"
+            )
+
+    return f"""# 角色
+你是广州花园酒店的智能客服助手。所有回答必须**仅基于**下面提供的住客评论与背景摘要。
+你正在与用户进行多轮对话，请利用对话历史理解上下文，保持回答的连贯性。
+
+# 上下文
+- 今日：{date_str}
+- 用户问题：{user_query}
+- 系统识别意图：{queries_block}
+
+{conversation_block}
+# 相关用户评论（编号 1..N，可被 [[ref:N]] 引用）
+{comments_block}
+
+{summaries_block}
+
+# 任务
+用自然中文回答用户问题，篇幅在 150–300 字之间，按问题复杂度自适应。结构如下，**禁止使用任何 ## 大标题**：
+
+1. **开头段**：1–2 句直接给出对用户问题的明确结论（句末贴 [[ref:N]] 引用）。若为多轮追问，开头可呼应上一轮对话内容。若评论不足以回答，第一句直说"目前评论中暂未涉及……"。
+2. **要点列表**：紧接着用 2–3 个 `- ` Markdown 无序列表项展开关键评价；同主题合并、正负兼顾，每条末尾带一个 [[ref:..]] 标记。
+3. **风险提示（仅在确有显著负面/限制项时输出）**：另起一段，以"需要留意的是"或"提醒一下"开头，单段 1 句话，句末附 [[ref:N]]。无显著负面则**整段省略**。
+
+# 约束
+C1 引用：仅在确凿对应时使用 [[ref:N]]。同一标记内逗号分隔，最多 3 条；超出时在 ]] **之外**加"等"字，例如 `[[ref:1,3]]等`。**严禁** `[[ref:1,3,等]]`、`[[ref:1]][[ref:2]]`。
+C2 反幻觉：仅基于评论与摘要；不得调用 API、不得推测库存/活动/价格。
+C3 客观：避免"全部 / 总是 / 绝对"；不以偏概全。
+C4 表达：开头段不要写"## 直接回答"这种标题；正文不出现"评论"、"摘要"、"参考"等元词；不罗列日期；时效敏感时只用"近期/半年内/一年内"。
+C5 多轮连贯性：如果对话历史表明这是追问，回答开头应自然衔接上文；使用"确实"、"此外"、"关于您提到的"等衔接词。
+C6 输出：纯 Markdown，不要包 ```markdown / ``` 代码栅栏，不要任何 H1/H2/H3 标题。
+
+# 自校验
+- [[ref:..]][[ref:..]] 紧邻 → 合并为 [[ref:N,M]]
+- 单标记内 > 3 条 → 截到 2 条 + ]]外的"等"
+- "等"字误写在 ]] 内 → 移到 ]] 之外
+- 是否出现"##"标题或"摘要"二字 → 删除
+- 引用编号是否真在文中相邻陈述里出现过？否则删掉
+- 作为追问回复时，是否自然衔接了上文？
+
+请直接输出最终回答。
+"""
+
+
+def _v2_chitchat(user_query, history, conversation_context: str = "") -> str:
+    """v2 闲聊 prompt：带多轮对话上下文"""
+    conversation_block = ""
+    if conversation_context:
+        conversation_block = f"\n# 对话历史\n{conversation_context}\n"
+    history_block = ""
+    if history and history.get("user") and history.get("assistant") and is_followup(user_query):
+        history_block = f"（上一轮｜{history['user']} → {history['assistant'][:60]}）"
+
+    return f"""# 角色
+你是广州花园酒店的智能客服助手。
+
+# 任务
+友好回应用户的问候 / 通用问询；≤ 80 字，单段。
+多轮对话时：如果用户在闲聊后回到酒店话题，自然衔接。
+
+# 严格约束
+- 不得提及"评论 / 住客 / 评价"等字样
+- 不得使用 [[ref:..]] 标记
+- 不得编造房态、活动、价格、设施细节
+{conversation_block}
+# 当前用户输入
+{user_query}
+{history_block}
+
+请输出回答。
+"""
+
+
 # ── 统一入口 ────────────────────────────────────────────────────────
 
 def build_prompt(version: str, user_query: str, rewritten_queries=None,
                  ranked_comments=None, summaries=None, need_retrieval: bool = True,
-                 today=None, history: Optional[dict] = None) -> str:
+                 today=None, history: Optional[dict] = None,
+                 conversation_context: str = "") -> str:
     if version == "v0":
         if not need_retrieval:
             return _v0_chitchat(user_query, history)
@@ -333,4 +466,9 @@ def build_prompt(version: str, user_query: str, rewritten_queries=None,
             return _v1_chitchat(user_query, history)
         return _v1_retrieval(user_query, rewritten_queries, ranked_comments,
                              summaries, today, history)
+    if version == "v2":
+        if not need_retrieval:
+            return _v2_chitchat(user_query, history, conversation_context)
+        return _v2_retrieval(user_query, rewritten_queries, ranked_comments,
+                             summaries, today, history, conversation_context)
     raise ValueError(f"unknown prompt version: {version}")

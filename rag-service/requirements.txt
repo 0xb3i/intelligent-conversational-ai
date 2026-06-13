@@ -12,3 +12,4 @@ dashvector
 openai
 chromadb
 tqdm
+scikit-learn

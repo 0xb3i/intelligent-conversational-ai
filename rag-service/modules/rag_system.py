@@ -147,8 +147,13 @@ class HotelReviewRAG:
               implied_boost: float = 0.5,
               clear_boost: float = 0.5,
               half_life_days: int = 180,
+              diversity_method: str | None = None,
+              diversity_lambda: float = 0.5,
+              diversity_theta: float = 1.0,
               today: datetime | None = TODAY,
-              history: dict | None = None) -> dict:
+              history: dict | None = None,
+              conversation_context: str = "",
+              retrieval_context: dict | None = None) -> dict:
         """
         处理用户查询并生成回复
 
@@ -186,7 +191,7 @@ class HotelReviewRAG:
                         self._timed_call, self.constraint_detector.detect, user_query
                     )
                     future_expand = executor.submit(
-                        self._timed_call, self.intent_expander.expand, user_query
+                        self._timed_call, self.intent_expander.expand, user_query, retrieval_context
                     )
                     intent_detection_result, timing['intent_detection'] = future_detect.result()
                     intent_expansion_result, timing['intent_expansion'] = future_expand.result()
@@ -204,7 +209,7 @@ class HotelReviewRAG:
                 first_token_base = time.time() - total_start
                 response, ttft_model, subsequent, generation = self.generator.generate(
                     user_query, need_retrieval=False, print_response=print_response,
-                    today=today, history=history
+                    today=today, history=history, conversation_context=conversation_context
                 )
                 timing['ttft'] = first_token_base + ttft_model
                 timing['ttft_model'] = ttft_model
@@ -264,7 +269,11 @@ class HotelReviewRAG:
                 w_length=w_length, w_review=w_review,
                 w_useful=w_useful, w_recency=w_recency,
                 base_decay=base_decay, implied_boost=implied_boost,
-                clear_boost=clear_boost, half_life_days=half_life_days
+                clear_boost=clear_boost, half_life_days=half_life_days,
+                diversity_method=diversity_method,
+                diversity_lambda=diversity_lambda,
+                diversity_theta=diversity_theta,
+                embedding_client=self.retriever.embedding_client
             )
             ranked_comments, ranking_timing = ranker.rank(
                 user_query, comments,
@@ -287,7 +296,8 @@ class HotelReviewRAG:
                 need_retrieval=True,
                 print_response=print_response,
                 today=today,
-                history=history
+                history=history,
+                conversation_context=conversation_context
             )
             timing['ttft'] = first_token_base + ttft_model
             timing['ttft_model'] = ttft_model
@@ -358,8 +368,13 @@ class HotelReviewRAG:
                      implied_boost: float = 0.5,
                      clear_boost: float = 0.5,
                      half_life_days: int = 180,
+                     diversity_method: str | None = None,
+                     diversity_lambda: float = 0.5,
+                     diversity_theta: float = 1.0,
                      today: datetime | None = TODAY,
-                     history: dict | None = None):
+                     history: dict | None = None,
+                     conversation_context: str = "",
+                     retrieval_context: dict | None = None):
         """
         流式处理用户查询（用于 FastAPI SSE 接口）
 
@@ -407,7 +422,8 @@ class HotelReviewRAG:
         # 直接回答（不需要检索）
         if not need_retrieval:
             for chunk in self.generator.generate_stream(
-                user_query, need_retrieval=False, today=today, history=history
+                user_query, need_retrieval=False, today=today, history=history,
+                conversation_context=conversation_context
             ):
                 yield {"type": "chunk", "content": chunk}
 
@@ -456,7 +472,11 @@ class HotelReviewRAG:
                 w_length=w_length, w_review=w_review,
                 w_useful=w_useful, w_recency=w_recency,
                 base_decay=base_decay, implied_boost=implied_boost,
-                clear_boost=clear_boost, half_life_days=half_life_days
+                clear_boost=clear_boost, half_life_days=half_life_days,
+                diversity_method=diversity_method,
+                diversity_lambda=diversity_lambda,
+                diversity_theta=diversity_theta,
+                embedding_client=self.retriever.embedding_client
             )
             ranked_comments, ranking_timing = ranker.rank(
                 user_query, comments,

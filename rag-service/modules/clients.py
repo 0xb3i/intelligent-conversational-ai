@@ -34,21 +34,29 @@ class LLMClient:
 class EmbeddingClient:
     """文本嵌入客户端封装"""
 
+    # DashScope text-embedding-v4 单次调用最大 batch size
+    MAX_BATCH_SIZE = 10
+
     def __init__(self, api_key: str, model: str = "text-embedding-v4", dimension: int = 1024):
         self.api_key = api_key
         self.model = model
         self.dimension = dimension
 
     def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """批量生成 embedding"""
-        response = TextEmbedding.call(
-            api_key=self.api_key,
-            model=self.model,
-            input=texts,
-            dimension=self.dimension
-        )
-
-        if response.status_code == 200:
-            return [item['embedding'] for item in response.output['embeddings']]
-        else:
-            raise RuntimeError(f"Embedding 调用失败: {response.message}")
+        """批量生成 embedding，自动对大 batch 做分片处理"""
+        all_embeddings = []
+        for i in range(0, len(texts), self.MAX_BATCH_SIZE):
+            chunk = texts[i:i + self.MAX_BATCH_SIZE]
+            response = TextEmbedding.call(
+                api_key=self.api_key,
+                model=self.model,
+                input=chunk,
+                dimension=self.dimension
+            )
+            if response.status_code == 200:
+                all_embeddings.extend(
+                    [item['embedding'] for item in response.output['embeddings']]
+                )
+            else:
+                raise RuntimeError(f"Embedding 调用失败: {response.message}")
+        return all_embeddings
