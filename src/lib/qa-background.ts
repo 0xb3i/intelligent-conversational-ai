@@ -24,6 +24,7 @@ interface ActiveStream {
 
 const SESSION_STORAGE_KEY = 'qa-chat-history';
 const ACTIVE_STREAM_KEY = 'qa-active-stream';
+const SESSION_ID_KEY = 'qa-session-id';
 
 // 全局变量，用于在组件卸载后继续处理流式响应
 let activeAbortController: AbortController | null = null;
@@ -196,7 +197,9 @@ export function startBackgroundStream(
       let references: Comment[] = [];
       let fullContent = '';
 
-      for await (const event of chatStreamEvents(question, signal, lastHistory)) {
+      const sessionId = getSessionId();
+
+      for await (const event of chatStreamEvents(question, signal, lastHistory, sessionId)) {
         if (signal.aborted) break;
 
         if (event.type === 'intent') {
@@ -342,5 +345,37 @@ export function syncActiveStreamToMessages(): Message[] {
 export function clearAllData() {
   abortCurrentStream();
   sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  sessionStorage.removeItem(SESSION_ID_KEY);
   clearActiveStream();
+}
+
+// ── Session ID 管理（多轮对话） ──────────────────────────────
+
+function generateUUID(): string {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+export function getSessionId(): string {
+  try {
+    let sid = sessionStorage.getItem(SESSION_ID_KEY);
+    if (!sid) {
+      sid = generateUUID();
+      sessionStorage.setItem(SESSION_ID_KEY, sid);
+    }
+    return sid;
+  } catch {
+    return generateUUID();
+  }
+}
+
+export function resetSessionId(): string {
+  const newId = generateUUID();
+  try {
+    sessionStorage.setItem(SESSION_ID_KEY, newId);
+  } catch { /* ignore */ }
+  return newId;
 }

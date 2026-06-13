@@ -128,9 +128,17 @@ class IntentExpander:
     def __init__(self, llm_client):
         self.llm_client = llm_client
 
-    def expand(self, query: str) -> dict:
+    def expand(self, query: str, context: dict | None = None) -> dict:
         """
         扩展用户意图
+
+        参数:
+            query: 用户原始查询（或消解后的查询）
+            context: 可选，多轮对话上下文，包含:
+                - has_history: bool
+                - recent_turns: list[{user, assistant}]
+                - entity_memory: dict
+                - long_term_summary: str
 
         返回:
             [
@@ -139,6 +147,19 @@ class IntentExpander:
                 {"query": "改写的查询3", "weight": 0.2}
             ]
         """
+        context_block = ""
+        if context and context.get("has_history") and context.get("recent_turns"):
+            context_block = "\n【对话上下文】\n"
+            for i, turn in enumerate(context["recent_turns"]):
+                context_block += f"前一轮用户：{turn['user']}\n"
+                context_block += f"前一轮助手：{turn['assistant'][:100]}\n"
+            if context.get("entity_memory"):
+                em = context["entity_memory"]
+                if em.get("last_room_type"):
+                    context_block += f"用户之前关注的房型：{em['last_room_type']}\n"
+            context_block += ("注意：当前查询可能是对上一轮对话的追问，"
+                            "请结合上下文理解用户完整意图。\n")
+
         prompt = f"""
 你是一个酒店智能客服助手，需要深度理解用户查询意图。
 
@@ -146,7 +167,7 @@ class IntentExpander:
 1. 分析用户查询，检测用户的核心关注点
 2. 生成1-3个改写后的查询，每个查询更清晰、更具体地表达一个关注点
 3. 为每个改写查询分配权重，表示该关注点的重要性（权重之和为1，且只允许使用0.2的倍数，即0.2,0.4,0.6,0.8,1.0）
-
+{context_block}
 【用户查询】
 {query}
 

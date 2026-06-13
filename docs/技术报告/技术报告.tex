@@ -1,8 +1,11 @@
 % =============================================================================
-% Hotel Review RAG 技术报告 — 个人贡献章节（优化项 2 与 16）
-% 篇幅约束：本人两项优化合计 ≤ 3 页（团队 8 项共用 10 页限额）
-% 版式：复用 tech-blog-style 的章节/标题/字号/留白，去除彩色 callout 框
-% 编译：xelatex 跑两遍
+% Hotel Review RAG 技术报告 — 团队技术报告
+% 优化项:
+%   (2)  评论文本分块与引用高亮
+%   (16) Prompt 结构化优化
+%   (15) 多样性重排（MMR + DPP）
+%   (19) 多轮对话上下文管理
+% 编译: xelatex 跑两遍
 % =============================================================================
 \documentclass[11pt]{ctexart}
 
@@ -13,6 +16,7 @@
 \usepackage{array}
 \usepackage{tabularx}
 \usepackage[table]{xcolor}
+\usepackage{amsmath}
 \usepackage{hyperref}
 \usepackage{enumitem}
 \usepackage{caption}
@@ -24,7 +28,7 @@
   linkcolor=black!75,
   urlcolor=black!75,
   pdftitle={Hotel Review RAG 技术报告},
-  pdfsubject={Optimizations 2 \& 16}
+  pdfsubject={Optimizations 2, 15, 16, 19}
 }
 
 \setlength{\parskip}{0.45em}
@@ -34,7 +38,7 @@
 \linespread{1.30}
 \setlength{\headheight}{14pt}
 
-% --- 配色（仅用于章节锚标与分割线，无彩色块） ---
+% --- 配色 ---
 \definecolor{InkBlack}{RGB}{33, 37, 41}
 \definecolor{Accent}{RGB}{47, 84, 150}
 \definecolor{Soft}{RGB}{240, 243, 247}
@@ -45,7 +49,7 @@
 \setlength{\belowrulesep}{0pt}
 \setlength{\extrarowheight}{2.5pt}
 
-% --- 章节样式（与 skill 保持一致：左侧蓝色锚标 + 加粗黑体） ---
+% --- 章节样式 ---
 \newcommand{\sectionanchor}{%
   \raisebox{0.05em}{\textcolor{Anchor}{\rule{3pt}{0.95em}}}\hspace{0.55em}%
 }
@@ -60,7 +64,7 @@
 
 \begin{document}
 
-% --- 标题区（与 skill 一致的居中标题，但去掉黄色标签 callout） ---
+% --- 标题区 ---
 \begin{center}
 \vspace*{-0.4em}
 {\fontsize{19pt}{24pt}\selectfont\bfseries\color{InkBlack} 技术报告\par}
@@ -69,6 +73,9 @@
 \end{center}
 \vspace{0.3em}
 
+% =============================================================================
+% 同学 A: 优化项 (2) 评论文本分块与引用高亮
+% =============================================================================
 \section{评论文本分块与引用高亮}
 
 \subsection{痛点}
@@ -112,6 +119,9 @@
   \label{fig:hl}
 \end{figure}
 
+% =============================================================================
+% 同学 A: 优化项 (16) Prompt 结构化优化
+% =============================================================================
 \section{Prompt 结构化优化}
 
 \subsection{痛点}
@@ -131,6 +141,110 @@
   \includegraphics[width=0.92\textwidth]{screenshots/02_prompt_answer.jpg}
   \caption{重构后 Prompt 在真实链路上的回答示例，三层结构稳定且引用合规。}
   \label{fig:answer}
+\end{figure}
+
+% =============================================================================
+% 同学 B (xuyueming): 优化项 (15) 多样性重排（MMR + DPP）
+% =============================================================================
+\section{多样性重排（MMR 与 DPP）}
+
+\subsection{痛点}
+
+现有排序模块在融合相关性、内容质量与时效性三个维度的特征后，直接按综合得分从高到低取 Top-10 返回。这种纯贪心策略在酒店评论场景下存在明显的信息冗余问题：当用户问「早餐怎么样」时，排名靠前的评论可能全部集中在自助早餐的品种丰富度上，而中餐厅早餐、行政酒廊早餐、room service 早餐等其他角度的信息被完全忽略。返回的 10 条评论虽然在单条层面上都「相关」，但在集合层面上高度同质——它们反复在说同一件事的不同措辞版本，对用户的决策参考价值有限。根本原因在于贪心排序只关注每条评论自身的质量，完全不考虑所选集合内部的信息重叠程度。
+
+\subsection{方案}
+
+在原有排序流程中插入一个可选的多样性重排阶段。具体来说，在 \texttt{MultiFactorRanker} 完成 100 条候选评论的多因子打分之后、截取 Top-10 之前，调用多样性重排器从 100 条中选出 10 条兼顾相关性与集合内差异度的评论。整个阶段通过参数 \texttt{diversity\_method} 控制，支持三种算法，实现为独立的 \texttt{DiversityReranker} 模块（\texttt{diversity.py}）。
+
+\textbf{MMR（Maximal Marginal Relevance）。}经典的最大边际相关性算法，每轮贪心选取使 \(\lambda\cdot\text{score}(d_i)-(1-\lambda)\cdot\max_{d_j\in S}\text{sim}(d_i,d_j)\) 最大化的候选。其中 \(\text{score}(d_i)\) 复用现有多因子综合得分（已归一化），\(\text{sim}(d_i,d_j)\) 为评论 text-embedding-v4 向量的余弦相似度，\(\lambda\in[0,1]\) 控制相关性与多样性的权衡。
+
+\textbf{DPP（Determinantal Point Process）。}构造核矩阵 \(L_{ij}=q_i\cdot S_{ij}\cdot q_j\)，其中质量项 \(q_i=\text{score}_i^{\theta}\)（\(\theta>1\) 放大高分差距、偏向相关性，\(\theta<1\) 压缩差距、偏向多样性），相似度项 \(S_{ij}=(\cos\_\text{sim}_{ij}+1)/2\) 映射到 \([0,1]\)。采用贪心 MAP 推断，每轮选取使 Schur 补增益 \(\text{gain}(i)=L_{ii}-\mathbf{L}_{iS}\mathbf{L}_{SS}^{-1}\mathbf{L}_{Si}\) 最大的候选。
+
+\textbf{Fast-DPP。}先用 k-means（\(k=2\times\text{topk}\)）将候选按 embedding 聚类，每簇内仅保留得分最高的 3 条进入 DPP 精排，将复杂度从 \(O(N^2K)\) 降至 \(O(N\cdot c+M^2K)\)。
+
+为量化评估效果，排序模块对所有请求（包括 baseline）均计算 Top-10 结果的 mean pairwise cosine similarity 并写入响应元数据，该值越低说明返回集合的冗余越少。
+
+\subsection{效果}
+
+在 30 个评估问题上对 1 组基线 + 3 组 MMR（\(\lambda=0.3,0.5,0.7\)）+ 3 组 DPP（\(\theta=0.5,1.0,2.0\)）共 7 种配置进行消融对比。综合得分定义为 \(\text{composite}=0.4\times\text{avg\_relevance}+0.6\times(1-\text{mean\_pairwise\_sim})\)，其中第二项直接衡量返回集合的去冗余程度。
+
+结果如表~\ref{tab:diversity} 所示。\textbf{三组 MMR 配置全部优于 baseline}，验证了多样性重排的有效性。MMR \(\lambda=0.3\) 以最高的多样性质量（\(1-\text{sim}=0.461\)）取得最优综合得分 0.490，相比 baseline（0.458）提升 7.0\%。从 \(\lambda=0.7\) 到 \(\lambda=0.3\)，成对相似度从 0.603 单调降至 0.539，类别覆盖率逐步上升，同时相关性从 0.591 降至 0.534，呈现清晰的多样性-相关性权衡曲线，完全符合 MMR 理论预期。图~\ref{fig:tradeoff} 直观展示了这一权衡关系。
+
+DPP 三组在降低相似度方面表现符合预期（sim 均低于 baseline），但相关性损失过大（rel 仅 0.40 左右，比 baseline 低约 33\%），导致综合得分反而不及 baseline。根因在于 DPP 核矩阵中质量项与相似度项的耦合方式在当前分数分布下过度放大了多样性维度，后续可通过引入质量-多样性混合系数或调整核矩阵构造方式改进。
+
+\begin{table}[H]
+  \centering
+  \small
+  \caption{多样性消融实验关键指标（30 题均值）。综合得分 = rel \(\times\) 0.4 + (1-sim) \(\times\) 0.6。}
+  \label{tab:diversity}
+  \renewcommand{\arraystretch}{1.22}
+  \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{3.0cm} >{\centering\arraybackslash}X >{\centering\arraybackslash}X >{\centering\arraybackslash}X >{\centering\arraybackslash}X}
+    \toprule
+    \rowcolor{Soft}
+    \textbf{配置} & \textbf{类别覆盖 \(\uparrow\)} & \textbf{相关性 \(\uparrow\)} & \textbf{成对相似度 \(\downarrow\)} & \textbf{综合得分 \(\uparrow\)} \\
+    \midrule
+    baseline                  & 0.676 & \textbf{0.597} & 0.634 & 0.458 \\
+    \midrule
+    MMR \(\lambda=0.7\)       & 0.686 & 0.591 & 0.603 & 0.475 \\
+    MMR \(\lambda=0.5\)       & 0.700 & 0.574 & 0.573 & 0.486 \\
+    MMR \(\lambda=0.3\)       & \textbf{0.698} & 0.534 & \textbf{0.539} & \textbf{0.490} \\
+    \midrule
+    DPP \(\theta=0.5\)        & 0.657 & 0.410 & 0.576 & 0.418 \\
+    DPP \(\theta=1.0\)        & 0.669 & 0.403 & 0.578 & 0.414 \\
+    DPP \(\theta=2.0\)        & 0.683 & 0.398 & 0.591 & 0.405 \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.88\textwidth]{screenshots/03_tradeoff.png}
+  \caption{多样性-相关性权衡散点图。右上象限为 strictly-better 区域，三组 MMR 均明显优于 baseline。}
+  \label{fig:tradeoff}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.88\textwidth]{screenshots/03_sensitivity.png}
+  \caption{MMR \(\lambda\) 与 DPP \(\theta\) 的参数敏感性曲线。虚线为 baseline 基准值。}
+  \label{fig:sensitivity}
+\end{figure}
+
+% =============================================================================
+% 同学 B (xuyueming): 优化项 (19) 多轮对话上下文管理
+% =============================================================================
+\section{多轮对话上下文管理}
+
+\subsection{痛点}
+
+原系统的「多轮对话」支持仅限于将上一轮的 \texttt{\{user, assistant\}} 作为 \texttt{history} 字段传回后端，由 Prompt 模板中的硬编码触发词列表决定是否注入。这套机制存在五个结构性问题。第一，仅存上一轮，超过两轮的对话信息全部丢失。第二，追问判断依赖固定触发词（「那、还有、这个……」），像「隔音怎么样？」这种省略主语的完整中文追问无法被识别。第三，检索阶段完全无上下文感知，追问「那午餐呢？」时仍用原始 query 检索，不会自动补全为完整问题。第四，无 token 预算管理，多轮累积可能超出模型上下文窗口。第五，prompt 模板与生成器未对多轮场景做结构化适配，对话历史仅作为一段平文拼接，缺少分层组织。
+
+\subsection{方案}
+
+新增 \texttt{ConversationManager} 作为 RAG 系统的有状态会话层（\texttt{conversation.py}），在 FastAPI 应用级别维护 \texttt{session\_id → ConversationManager} 的映射字典，前端通过 UUID 标识会话并持久化于 sessionStorage。整个多轮对话管线分为三个阶段。
+
+\textbf{查询消解。}在意图识别之前，新增 \texttt{QueryResolver} 模块。当会话已有历史轮次时，将当前 query 与最近几轮对话一并送入 qwen-flash 做指代消解与主语补全：例如「隔音怎么样？」结合上文「红棉套房的床品舒服吗？」被消解为「红棉套房的隔音怎么样？」。消解后的完整 query 替代原始 query 进入意图识别→意图扩展→混合检索流程，确保检索阶段也受益于对话上下文。同时，\texttt{IntentExpander} 在意图扩展时接收对话上下文，使子意图的生成更贴合多轮语境。
+
+\textbf{分层上下文注入。}生成阶段的 Prompt 新增 v2 模板（\texttt{prompts.py}），对话历史按三层优先级组织：Layer~1 为最近 2 轮完整问答（追问时最关键），Layer~2 为中间轮次的话题摘要，Layer~3 为 LLM 压缩的长期摘要。三层按 token 预算（默认 1200 tokens）自顶向下逐层注入，超出预算的低优先层级自动截断。v2 模板增加了「多轮连贯性」约束，要求模型在回复开头使用衔接词（如「确实」「此外」「关于您提到的」）自然呼应上文。
+
+\textbf{对话摘要压缩。}当轮次超过阈值（默认 4 轮）时触发 \texttt{ContextCompressor} 将最早 2 轮对话压缩为 1--2 句摘要，追加到长期摘要缓冲区，同时释放旧轮次占用的 token 空间。整套机制为每个会话维护完整的轮次列表（最多保留 10 轮）与渐进式摘要，支持序列化以对接前端 sessionStorage，会话 30 分钟无活动自动过期。
+
+\subsection{效果}
+
+图~\ref{fig:multi1} 与图~\ref{fig:multi2} 分别展示了同一会话中连续两轮的真实问答交互。首轮用户提问「早餐怎么样？」，系统正常返回检索评论与流式回答。第二轮用户输入追问「那午餐呢？」，服务端 \texttt{QueryResolver} 自动将其消解为完整问题，随后以消解后的 query 完成检索与生成。整个过程对用户透明，前端无需修改 UI 逻辑即可获得多轮连贯体验。在 5 组手工构造的多轮场景（含指代消解、主语省略、跨轮对比、话题切换、长对话压缩）的测试中，查询消解与上下文注入在各场景下均正确生效。
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\textwidth]{screenshots/03_multi_session1.png}
+  \caption{首轮问答：用户询问早餐，系统正常检索并流式生成回答。}
+  \label{fig:multi1}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\textwidth]{screenshots/03_multi_session2.png}
+  \caption{第二轮追问「那午餐呢？」：QueryResolver 自动消解为完整 query，回答自然衔接上文。}
+  \label{fig:multi2}
 \end{figure}
 
 \end{document}

@@ -82,7 +82,7 @@ class ResponseGenerator:
     """回复生成器：基于检索上下文生成最终回复"""
 
     def __init__(self, api_key: str, model: str = "qwen-plus",
-                 prompt_version: str = "v1"):
+                 prompt_version: str = "v2"):
         self.api_key = api_key
         self.model = model
         self.prompt_version = prompt_version
@@ -90,7 +90,8 @@ class ResponseGenerator:
     def _build_prompt(self, user_query: str, rewritten_queries=None,
                       ranked_comments=None, summaries=None,
                       need_retrieval: bool = True, today: datetime | None = None,
-                      history: dict | None = None) -> str:
+                      history: dict | None = None,
+                      conversation_context: str = "") -> str:
         """构建生成 prompt（统一委托给 prompts.build_prompt）"""
         return build_prompt(
             version=self.prompt_version,
@@ -101,6 +102,7 @@ class ResponseGenerator:
             need_retrieval=need_retrieval,
             today=today,
             history=history,
+            conversation_context=conversation_context,
         )
 
     def _call_kwargs(self, prompt: str, temperature: float = 0.7) -> dict:
@@ -117,7 +119,8 @@ class ResponseGenerator:
 
     def generate(self, user_query: str, rewritten_queries=None, ranked_comments=None,
                  summaries=None, need_retrieval: bool = True, print_response: bool = True,
-                 today: datetime | None = None, history: dict | None = None) -> tuple[str, float, float, float]:
+                 today: datetime | None = None, history: dict | None = None,
+                 conversation_context: str = "") -> tuple[str, float, float, float]:
         """
         生成回复（流式输出）
 
@@ -126,7 +129,8 @@ class ResponseGenerator:
         """
         start_time = time.time()
         prompt = self._build_prompt(user_query, rewritten_queries, ranked_comments,
-                                    summaries, need_retrieval, today, history)
+                                    summaries, need_retrieval, today, history,
+                                    conversation_context)
 
         completion = Generation.call(**self._call_kwargs(prompt))
 
@@ -165,7 +169,8 @@ class ResponseGenerator:
 
     def generate_stream(self, user_query: str, rewritten_queries=None, ranked_comments=None,
                         summaries=None, need_retrieval: bool = True,
-                        today: datetime | None = None, history: dict | None = None):
+                        today: datetime | None = None, history: dict | None = None,
+                        conversation_context: str = ""):
         """
         流式生成回复（yield 每个 chunk）
 
@@ -173,7 +178,8 @@ class ResponseGenerator:
             str: 每个文本 chunk
         """
         prompt = self._build_prompt(user_query, rewritten_queries, ranked_comments,
-                                    summaries, need_retrieval, today, history)
+                                    summaries, need_retrieval, today, history,
+                                    conversation_context)
 
         completion = Generation.call(**self._call_kwargs(prompt))
 

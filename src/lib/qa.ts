@@ -20,12 +20,16 @@ const PYTHON_API_URL = process.env.NEXT_PUBLIC_PYTHON_API_URL || 'http://localho
 export async function* chatStreamEvents(
   question: string,
   signal?: AbortSignal,
-  history?: { user: string; assistant: string } | null
+  history?: { user: string; assistant: string } | null,
+  sessionId?: string | null
 ): AsyncGenerator<StreamEvent, void, unknown> {
   try {
     const body: Record<string, unknown> = { query: question };
     if (history) {
       body.history = history;
+    }
+    if (sessionId) {
+      body.session_id = sessionId;
     }
 
     const response = await fetch(`${PYTHON_API_URL}/api/v1/chat`, {

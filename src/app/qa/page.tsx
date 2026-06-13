@@ -11,7 +11,8 @@ import {
   syncActiveStreamToMessages,
   startBackgroundStream,
   abortCurrentStream,
-  clearAllData
+  clearAllData,
+  resetSessionId
 } from '@/lib/qa-background';
 
 export default function QAPage() {
@@ -311,6 +312,7 @@ export default function QAPage() {
       handleStop();
     }
     clearAllData();
+    resetSessionId(); // 开始新的多轮对话会话
     setMessages([]);
     setBottomPadding(0);
   };

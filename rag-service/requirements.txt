@@ -11,3 +11,4 @@ dashscope
 dashvector
 chromadb
 tqdm
+scikit-learn
