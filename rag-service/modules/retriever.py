@@ -39,7 +39,8 @@ class HybridRetriever:
 
     def retrieve(self, rewritten_queries, room_type=None, fuzzy_room_type=None, topk=150,
                  final_topk=100, enable_bm25=True, enable_vector=True,
-                 enable_reverse=True, enable_hyde=True, enable_summary=True):
+                 enable_reverse=True, enable_hyde=True, enable_summary=True,
+                 dashvector_filter=None, bm25_filter_keywords=None):
         """
         混合检索
 
@@ -49,9 +50,8 @@ class HybridRetriever:
             fuzzy_room_type: 模糊房型约束
             topk: 每次召回的评论数量
             final_topk: 最终返回的评论数量
-
-        返回:
-            (comment_results, summary_results, timing_info, hyde_results)
+            dashvector_filter: DashVector 兼容过滤表达式（优化项 10）
+            bm25_filter_keywords: BM25 关键词约束列表（优化项 10）
         """
         timing = {}
         retrieve_start_time = time.time()
@@ -64,12 +64,16 @@ class HybridRetriever:
             query_embeddings = self.embedding_client.embed_batch(queries)
             embedding_time = time.time() - embedding_start_time
 
-        # 构建房型过滤条件
-        room_filter = None
-        if room_type:
-            room_filter = f"room_type = '{room_type}'"
-        elif fuzzy_room_type:
-            room_filter = f"fuzzy_room_type = '{fuzzy_room_type}'"
+        # 构建过滤条件：优先使用增强约束的 dashvector_filter，回退到旧方式
+        room_filter = dashvector_filter
+        if not room_filter:
+            if room_type:
+                room_filter = f"room_type = '{room_type}'"
+            elif fuzzy_room_type:
+                room_filter = f"fuzzy_room_type = '{fuzzy_room_type}'"
+
+        # BM25 关键词约束
+        bm25_kws = bm25_filter_keywords or []
 
         enabled_routes = sum([enable_bm25, enable_vector, enable_reverse, enable_hyde, enable_summary])
         if enabled_routes == 0:
@@ -78,7 +82,7 @@ class HybridRetriever:
         with ThreadPoolExecutor(max_workers=enabled_routes) as executor:
             futures = {}
             if enable_bm25:
-                futures[executor.submit(self._route_bm25, queries, topk)] = 'bm25'
+                futures[executor.submit(self._route_bm25, queries, topk, bm25_kws)] = 'bm25'
             if enable_vector:
                 futures[executor.submit(self._route_vector, query_embeddings, topk, room_filter)] = 'vector'
             if enable_reverse:
@@ -198,23 +202,29 @@ class HybridRetriever:
 
     # ── BM25 路 ──────────────────────────────────────────────
 
-    def _route_bm25(self, queries, topk):
+    def _route_bm25(self, queries, topk, bm25_kws=None):
         """第一路：BM25 文本召回。chunked_index 存在时走 chunk 级检索 + 折叠。"""
         start = time.time()
         results = []
         with ThreadPoolExecutor(max_workers=len(queries)) as executor:
             futures = [
-                executor.submit(self._single_bm25_query, query_idx, query, topk)
+                executor.submit(self._single_bm25_query, query_idx, query, topk, bm25_kws)
                 for query_idx, query in enumerate(queries)
             ]
             for future in as_completed(futures):
                 results.extend(future.result())
         return results, time.time() - start
 
-    def _single_bm25_query(self, query_idx, query, topk):
-        # 优先使用 chunked 索引：每个 query 取 topk * 5 条 chunk，按 comment_id 折叠到 topk
+    def _single_bm25_query(self, query_idx, query, topk, bm25_kws=None):
+        """单次 BM25 查询，支持关键词约束增强"""
+        # 将 BM25 过滤关键词追加到 query 中增强检索精度
+        enhanced_query = query
+        if bm25_kws:
+            enhanced_query = query + " " + " ".join(bm25_kws)
+
+        # 优先使用 chunked 索引
         if self.chunked_index is not None and self.chunk_meta:
-            raw = self.chunked_index.search(query, topk=topk * 5)
+            raw = self.chunked_index.search(enhanced_query, topk=topk * 5)
             seen = {}
             collapsed = []
             for chunk_id, score in raw:
@@ -243,7 +253,7 @@ class HybridRetriever:
             ]
 
         # 回退：旧的整条评论 BM25
-        bm25_results = self.inverted_index.search(query, topk=topk)
+        bm25_results = self.inverted_index.search(enhanced_query, topk=topk)
         return [(doc_id, 'bm25', rank, {'query_idx': query_idx})
                 for rank, (doc_id, score) in enumerate(bm25_results, 1)]
 

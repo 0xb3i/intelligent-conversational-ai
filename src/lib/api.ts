@@ -39,11 +39,11 @@ export async function getComments(
     query = query.ilike('comment', `%${filters.keyword}%`);
   }
 
-  // 类别筛选：使用 OR 条件查询三个字段
-  // 构建 OR 条件字符串: category1.in.(cat1,cat2),category2.in.(cat1,cat2),category3.in.(cat1,cat2)
+  // 类别筛选：使用 categories JSON 数组字段
   if (filters.categories && filters.categories.length > 0) {
     const cats = filters.categories.join(',');
-    const orCondition = `category1.in.(${cats}),category2.in.(${cats}),category3.in.(${cats})`;
+    // 使用 cs (contains) 操作符查询 JSON 数组
+    const orCondition = filters.categories.map(c => `categories.cs.{${c}}`).join(',');
     query = query.or(orCondition);
   }
 
@@ -100,10 +100,9 @@ export async function getHighQualityComments(
     .order('quality_score', { ascending: false })
     .limit(limit);
 
-  // 类别筛选
+  // 类别筛选：使用 categories JSON 数组字段
   if (categories.length > 0) {
-    const cats = categories.join(',');
-    const orCondition = `category1.in.(${cats}),category2.in.(${cats}),category3.in.(${cats})`;
+    const orCondition = categories.map(c => `categories.cs.{${c}}`).join(',');
     query = query.or(orCondition);
   }
 
@@ -225,11 +224,23 @@ function computeStats(comments: Comment[]) {
 
 // 解析数据库返回的评论数据
 function parseComment(row: Record<string, unknown>): Comment {
-  // 从三个字段构建 categories 数组
-  const categories: StandardCategory[] = [];
-  if (row.category1) categories.push(row.category1 as StandardCategory);
-  if (row.category2) categories.push(row.category2 as StandardCategory);
-  if (row.category3) categories.push(row.category3 as StandardCategory);
+  // 解析 categories 字段（JSON 数组或逗号分隔字符串）
+  let categories: StandardCategory[] = [];
+  const rawCategories = row.categories;
+  if (typeof rawCategories === 'string') {
+    try {
+      categories = JSON.parse(rawCategories);
+    } catch {
+      categories = rawCategories.split(',').filter(Boolean) as StandardCategory[];
+    }
+  } else if (Array.isArray(rawCategories)) {
+    categories = rawCategories as StandardCategory[];
+  } else {
+    // 向后兼容：从旧的 category1/2/3 字段构建
+    if (row.category1) categories.push(row.category1 as StandardCategory);
+    if (row.category2) categories.push(row.category2 as StandardCategory);
+    if (row.category3) categories.push(row.category3 as StandardCategory);
+  }
 
   return {
     _id: row._id as string,
@@ -244,9 +255,6 @@ function parseComment(row: Record<string, unknown>): Comment {
     review_count: row.review_count as number,
     fuzzy_room_type: row.fuzzy_room_type as string,
     quality_score: row.quality_score as number,
-    category1: (row.category1 as StandardCategory) || null,
-    category2: (row.category2 as StandardCategory) || null,
-    category3: (row.category3 as StandardCategory) || null,
     categories
   };
 }

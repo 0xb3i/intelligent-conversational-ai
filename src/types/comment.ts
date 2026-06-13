@@ -31,11 +31,7 @@ export interface Comment {
   review_count: number;
   fuzzy_room_type: string;
   quality_score: number;
-  // 拆分的类别字段（用于数据库查询）
-  category1: StandardCategory | null;
-  category2: StandardCategory | null;
-  category3: StandardCategory | null;
-  // 聚合的类别数组（用于前端展示，从 category1/2/3 派生）
+  // 类别数组（支持多标签，不再限制 3 个）
   categories: StandardCategory[];
   // RAG 命中关键句（仅在 RAG 引用结果中存在；列表/详情场景为 undefined）
   primary_chunk?: PrimaryChunk | null;

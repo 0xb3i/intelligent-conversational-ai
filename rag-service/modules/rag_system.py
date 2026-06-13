@@ -13,7 +13,7 @@ import chromadb
 from config import TODAY, EXACT_ROOM_TYPES, FUZZY_ROOM_TYPES
 from modules.clients import LLMClient, EmbeddingClient
 from modules.index import InvertedIndex
-from modules.intent import IntentRecognizer, IntentDetector, IntentExpander, HyDEGenerator
+from modules.intent import IntentRecognizer, IntentDetector, IntentExpander, HyDEGenerator, ConstraintDetector
 from modules.retriever import HybridRetriever
 from modules.ranker import Reranker, MultiFactorRanker
 from modules.generator import ResponseGenerator
@@ -89,6 +89,9 @@ class HotelReviewRAG:
         self.intent_detector = IntentDetector(
             detection_client, EXACT_ROOM_TYPES, FUZZY_ROOM_TYPES
         )
+        self.constraint_detector = ConstraintDetector(
+            detection_client, EXACT_ROOM_TYPES, FUZZY_ROOM_TYPES
+        )
         self.intent_expander = IntentExpander(expansion_hyde_client)
         self.hyde_generator = HyDEGenerator(expansion_hyde_client)
         self.retriever = HybridRetriever(
@@ -159,7 +162,7 @@ class HotelReviewRAG:
             if enable_expansion:
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     future_detect = executor.submit(
-                        self._timed_call, self.intent_detector.detect, user_query
+                        self._timed_call, self.constraint_detector.detect, user_query
                     )
                     future_expand = executor.submit(
                         self._timed_call, self.intent_expander.expand, user_query
@@ -168,7 +171,7 @@ class HotelReviewRAG:
                     intent_expansion_result, timing['intent_expansion'] = future_expand.result()
             else:
                 intent_detection_result, timing['intent_detection'] = self._timed_call(
-                    self.intent_detector.detect, user_query
+                    self.constraint_detector.detect, user_query
                 )
                 intent_expansion_result, timing['intent_expansion'] = None, 0
 
@@ -225,7 +228,9 @@ class HotelReviewRAG:
             enable_vector=enable_vector,
             enable_reverse=enable_reverse,
             enable_hyde=enable_hyde,
-            enable_summary=enable_summary
+            enable_summary=enable_summary,
+            dashvector_filter=intent_detection_result.get('dashvector_filter'),
+            bm25_filter_keywords=intent_detection_result.get('bm25_filter_keywords', [])
         )
         timing['retrieval'] = retrieval_timing
 
@@ -363,7 +368,7 @@ class HotelReviewRAG:
             if enable_expansion:
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     future_detect = executor.submit(
-                        self._timed_call, self.intent_detector.detect, user_query
+                        self._timed_call, self.constraint_detector.detect, user_query
                     )
                     future_expand = executor.submit(
                         self._timed_call, self.intent_expander.expand, user_query
@@ -372,7 +377,7 @@ class HotelReviewRAG:
                     intent_expansion_result, timing['intent_expansion'] = future_expand.result()
             else:
                 intent_detection_result, timing['intent_detection'] = self._timed_call(
-                    self.intent_detector.detect, user_query
+                    self.constraint_detector.detect, user_query
                 )
 
         timing['query_processing_total'] = time.time() - query_processing_start
@@ -414,7 +419,9 @@ class HotelReviewRAG:
             enable_vector=enable_vector,
             enable_reverse=enable_reverse,
             enable_hyde=enable_hyde,
-            enable_summary=enable_summary
+            enable_summary=enable_summary,
+            dashvector_filter=intent_detection_result.get('dashvector_filter'),
+            bm25_filter_keywords=intent_detection_result.get('bm25_filter_keywords', [])
         )
         timing['retrieval'] = retrieval_timing
 
